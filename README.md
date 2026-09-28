@@ -123,16 +123,6 @@ Analiza las clases, atributos, tipos, métodos, multiplicidades y llamadas, repo
 - Clases y métodos que faltan por implementar en el código.
 - Inconsistencias de tipos de datos o relaciones no mapeadas.
 
-## Pruebas
-
-
-```bash
-python3 "MCP StarUML/pruebas/probar_servidor.py" "ruta/al/modelo.mdj" cu_1 cu_1_FB
-```
-
-Arranca el servidor, habla MCP por stdio y usa todas las herramientas. Las de escritura
-trabajan sobre copias temporales, así que el archivo que se pasa solo se lee. Al final
-rehace la secuencia desde su propia especificación y revisa que quede sin problemas.
 
 ## Archivos
 
