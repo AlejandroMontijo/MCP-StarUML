@@ -138,6 +138,7 @@ rehace la secuencia desde su propia especificación y revisa que quede sin probl
 
 - `server.py`: el servidor MCP (protocolo y definición de herramientas).
 - `staruml_mdj.py`: leer, validar y editar el `.mdj`.
-- `staruml_render.py`: exportar, revisar el SVG y recortar a PNG.
-- `reglas.md`: reglas de trabajo.
-- `pruebas/probar_servidor.py`: prueba de punta a punta.
+- `staruml_render.py`: exportar, revisar el SVG, recortar a PNG y visualización de alta resolución.
+- `staruml_compare.py`: comparador de diagramas contra código (Java, Python, TypeScript, C#) y generador de esqueletos.
+- `reglas.md`: reglas de trabajo (convenciones OOSE, secuencias, líneas y código).
+

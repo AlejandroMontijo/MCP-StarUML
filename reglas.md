@@ -68,8 +68,24 @@ aquí están para que quien lo use sepa por qué hace lo que hace.
 - Una lifeline sin nombre con rol tipado se ve como ": Tipo".
 
 ## Exportar y revisar
-
+ 
 - `staruml_exportar` usa el CLI (`StarUML image ... -f svg -s selector`) con límite de
   tiempo. Diagramas con el mismo nombre se sobrescriben entre sí al exportar todos.
 - `svg_recortar` usa Chrome headless con un perfil propio y lo cierra al terminar;
   funciona con rutas con espacios.
+- `staruml_ver_visual` genera una imagen PNG optimizada (1600 px máx.) y la devuelve
+  directamente en el protocolo para inspección visual.
+
+## Inspección y sincronización con código
+
+- `staruml_comparar_codigo`: escanea código fuente (Java, Python, TypeScript, C#) y
+  compara contra las clases o secuencias del diagrama:
+  - En clases: compara nombres, atributos, tipos de datos normalizados, métodos y
+    asociaciones reflejadas como campos o colecciones (`List<T>`).
+  - En secuencias: verifica que las clases receptoras tengan implementado el método
+    invocado y calcula el porcentaje de cobertura.
+- `staruml_diagrama_a_codigo`: genera esqueletos limpios y tipados con getters, setters
+  y atributos privados respetando el estándar del lenguaje.
+- `staruml_codigo_a_diagrama`: extrae clases desde código existente y las incorpora al
+  paquete del `.mdj` con su correspondiente vista.
+
