@@ -772,7 +772,7 @@ def vista_nueva(doc, dg, el, x, y, ancho=None, alto=None):
     lab = _name_label(nv)
     if lab:
         lab['text'] = nombre
-    dg['ownedViews'].append(nv)
+    dg.setdefault('ownedViews', []).append(nv)
     if k == 'entity':
         rehacer_atributos_vista(doc, nv, el)
     if alto:

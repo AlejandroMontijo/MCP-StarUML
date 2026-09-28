@@ -115,7 +115,8 @@ DCLASES = next(d['name'] for d in sorted(DOC0.diagrams(), key=lambda d: -len(d.g
 DSEC = next(d['name'] for d in sorted(DOC0.diagrams(), key=lambda d: -len(d.get('ownedViews', []))) if d['_type'] == 'UMLSequenceDiagram')
 ENT = [o for o in DOC0.ids.values() if o and o['_type'] == 'UMLClass' and DOC0.kind(o) == 'entity' and DOC0.views_of(o['_id'], DOC0.diagram(DCLASES))]
 BND = [o for o in DOC0.ids.values() if o and o['_type'] == 'UMLClass' and DOC0.kind(o) == 'boundary']
-PAQ = DOC0.name_of(DOC0.parent[ENT[0]['_id']])
+_po = DOC0.ids[DOC0.parent[ENT[0]['_id']]]
+PAQ = f"{_po['_type']}:{_po.get('name')}"
 print(f'modelo: {MDJ}\ndiagrama de clases: {DCLASES}; secuencia: {DSEC}; paquete: {PAQ}; temporales: {TMP}\n')
 
 # ===========================================================================
