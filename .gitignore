@@ -22,8 +22,8 @@ ENV/
 *.swp
 *.swo
 
-# Salidas temporales
+# Salidas temporales y pruebas
 scratch/
-pruebas/renders/
-pruebas/codigo_generado/
+pruebas/
 respaldos/
+
