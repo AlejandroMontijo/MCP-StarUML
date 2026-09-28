@@ -232,3 +232,69 @@ def recortar(svg, x=0, y=0, ancho=None, alto=None, salida=None, max_lado=None, t
         data = f.read()
     shutil.rmtree(tmp, ignore_errors=True)
     return {'png': data, 'salida': destino, 'region': [int(x), int(y), ancho, alto], 'tamano_svg': [W, H]}
+
+
+def ver_visual(mdj, diagrama, salida=None, max_lado=1600, formato='png', forzar=False):
+    """Genera una imagen visual PNG de alta fidelidad del diagrama indicado,
+    optimizada para inspeccion visual e IA multimodal (estilo Figma MCP)."""
+    doc = Doc(mdj)
+    dg = doc.diagram(diagrama)
+    dg_nombre = dg['name']
+    
+    # Directorio de cache para renders
+    cache_dir = os.path.join(tempfile.gettempdir(), 'staruml_mcp_renders')
+    os.makedirs(cache_dir, exist_ok=True)
+    svg_esperado = os.path.join(cache_dir, f"{dg_nombre}.svg")
+    
+    # Si el diagrama ya tiene un SVG exportado en la carpeta del mdj o pruebas/renders, usarlo
+    mdj_dir = os.path.dirname(os.path.abspath(os.path.expanduser(mdj)))
+    posibles_svg = [
+        os.path.join(mdj_dir, 'renders', f"{dg_nombre}.svg"),
+        os.path.join(mdj_dir, f"{dg_nombre}.svg"),
+        svg_esperado
+    ]
+    svg_existente = next((p for p in posibles_svg if os.path.exists(p)), None)
+    
+    mdj_mtime = os.path.getmtime(os.path.abspath(os.path.expanduser(mdj)))
+    necesita_exportar = forzar or (not svg_existente) or (os.path.getmtime(svg_existente) < mdj_mtime)
+    
+    if necesita_exportar:
+        exportar(mdj, cache_dir, dg_nombre, formato='svg')
+        if os.path.exists(svg_esperado):
+            svg_origen = svg_esperado
+        else:
+            candidatos = glob.glob(os.path.join(cache_dir, '*.svg'))
+            svg_origen = max(candidatos, key=os.path.getmtime) if candidatos else None
+    else:
+        svg_origen = svg_existente
+        
+    if not svg_origen or not os.path.exists(svg_origen):
+        raise MdjError(f'No se pudo obtener el SVG para el diagrama "{dg_nombre}"')
+        
+    # Rasterizar con Chrome headless
+    res_crop = recortar(svg_origen, salida=salida, max_lado=max_lado)
+    
+    # Metadata del diagrama
+    resumen_elementos = []
+    if dg.get('_type') == 'UMLClassDiagram':
+        for v in dg.get('ownedViews', []):
+            m = v.get('model')
+            if isinstance(m, dict) and '$ref' in m and m['$ref'] in doc.ids:
+                el = doc.ids[m['$ref']]
+                if el.get('_type') in ('UMLClass', 'UMLActor', 'UMLInterface'):
+                    resumen_elementos.append(f"{el.get('name')} ({doc.kind(el)})")
+    elif dg.get('_type') == 'UMLSequenceDiagram':
+        import staruml_mdj as M
+        sec = M.secuencia(doc, dg['_id'])
+        resumen_elementos = [f"Lifeline: {lf}" for lf in sec.get('lifelines', [])]
+        
+    return {
+        'diagrama': dg_nombre,
+        'tipo': dg['_type'],
+        'png': res_crop['png'],
+        'salida': res_crop['salida'],
+        'tamano_original': res_crop['tamano_svg'],
+        'vistas': len(dg.get('ownedViews', [])),
+        'elementos': resumen_elementos[:35]
+    }
+

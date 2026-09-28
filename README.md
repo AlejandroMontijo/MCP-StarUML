@@ -53,6 +53,11 @@ Requisitos:
 | `mdj_linea_etiqueta` | Mueve una etiqueta de una línea sin tocar sus puntos. |
 | `mdj_nota` | Crea o edita una nota; calcula su alto con el texto. |
 | `mdj_secuencia_generar` | Rehace un diagrama de secuencia completo a partir de lifelines y mensajes. |
+| `staruml_ver_visual` | Visualiza un diagrama como imagen PNG de alta resolución devuelta directamente en MCP (estilo Figma MCP). |
+| `staruml_comparar_codigo` | Compara un diagrama UML contra código (Java, Python, TS, C#), calculando porcentaje de sincronización y discrepancias. |
+| `staruml_diagrama_a_codigo` | Genera esqueletos de código fuente limpios (Java, Python, TS) a partir de las clases de un diagrama. |
+| `staruml_codigo_a_diagrama` | Importa clases, atributos y métodos desde código fuente hacia el modelo y diagrama .mdj. |
+
 
 ## Seguridad al escribir
 
@@ -91,7 +96,35 @@ antes de aplicarlo.
 }
 ```
 
+## Ejemplo: ver diagrama de manera visual (estilo Figma MCP)
+
+```json
+{
+  "archivo": "pruebas/proyecto_reconstruido.mdj",
+  "diagrama": "cu_1_FB",
+  "salida": "renders/cu_1_FB.png",
+  "max_lado": 1600
+}
+```
+Devuelve directamente en el chat el bloque de imagen PNG de alta fidelidad y la metadata de resolución y elementos para que el asistente pueda ver el diseño con visión multimodal.
+
+## Ejemplo: comparar diagrama con código fuente
+
+```json
+{
+  "archivo": "pruebas/proyecto_reconstruido.mdj",
+  "diagrama": "cu_1",
+  "ruta_codigo": "src/main/java/com/empresa/modelo",
+  "lenguaje": "java"
+}
+```
+Analiza las clases, atributos, tipos, métodos, multiplicidades y llamadas, reportando:
+- Porcentaje de sincronización / alineación.
+- Clases y métodos que faltan por implementar en el código.
+- Inconsistencias de tipos de datos o relaciones no mapeadas.
+
 ## Pruebas
+
 
 ```bash
 python3 "MCP StarUML/pruebas/probar_servidor.py" "ruta/al/modelo.mdj" cu_1 cu_1_FB

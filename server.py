@@ -10,6 +10,7 @@ import traceback
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import staruml_mdj as M          # noqa: E402
 import staruml_render as R       # noqa: E402
+import staruml_compare as C      # noqa: E402
 
 VERSION = '1.0.0'
 PROTOCOLOS = ('2025-06-18', '2025-03-26', '2024-11-05')
@@ -166,6 +167,73 @@ def t_svg_recortar(a):
     if a.get('devolver_imagen', True) is not False:
         content.append({'type': 'image', 'mimeType': 'image/png', 'data': base64.b64encode(r['png']).decode()})
     return {'__content__': content}
+
+
+# ---------------------------------------------------------------------------
+# Visualizacion e integracion con codigo (estilo Figma MCP)
+# ---------------------------------------------------------------------------
+
+@tool('staruml_ver_visual', 'Visualiza un diagrama como imagen PNG de alta resolucion (estilo Figma MCP). '
+      'Devuelve la imagen y sus metadatos directamente para que el asistente y el usuario puedan ver e inspeccionar '
+      'visualmente el diseno.',
+      obj({'archivo': ARCHIVO, 'diagrama': S(description='Nombre o id del diagrama a visualizar'),
+           'salida': S(description='Ruta opcional para guardar el archivo PNG generado'),
+           'max_lado': N(description='Lado maximo en pixeles (default 1600 para balance optimo)'),
+           'forzar': B(description='Forzar re-exportacion aunque exista cache')},
+          ['archivo', 'diagrama']), ro('Ver diagrama visual'))
+def t_ver_visual(a):
+    r = R.ver_visual(a['archivo'], a['diagrama'], salida=a.get('salida'),
+                     max_lado=a.get('max_lado', 1600), forzar=bool(a.get('forzar')))
+    info = {
+        'diagrama': r['diagrama'],
+        'tipo': r['tipo'],
+        'tamano_original_px': r['tamano_original'],
+        'vistas_totales': r['vistas'],
+        'elementos_destacados': r['elementos'],
+        'guardado_en': r['salida']
+    }
+    content = [
+        {'type': 'text', 'text': json.dumps(info, ensure_ascii=False, indent=2)},
+        {'type': 'image', 'mimeType': 'image/png', 'data': base64.b64encode(r['png']).decode()}
+    ]
+    return {'__content__': content}
+
+
+@tool('staruml_comparar_codigo', 'Compara exhaustivamente un diagrama UML (de clases o de secuencia) contra codigo fuente '
+      '(Java, Python, TypeScript, C#) al estilo del MCP de Figma. Analiza clases, atributos, metodos, tipos, '
+      'asociaciones y llamadas de secuencia, calculando el porcentaje de alineacion y reportando discrepancias.',
+      obj({'archivo': ARCHIVO, 'diagrama': S(description='Nombre o id del diagrama de clases o secuencia'),
+           'ruta_codigo': S(description='Carpeta o archivo de codigo fuente a comparar'),
+           'lenguaje': S(enum=['auto', 'java', 'python', 'typescript', 'csharp'], description='Lenguaje (default auto)')},
+          ['archivo', 'diagrama', 'ruta_codigo']), ro('Comparar con codigo'))
+def t_comparar_codigo(a):
+    doc = M.Doc(a['archivo'])
+    return C.comparar_diagrama_con_codigo(doc, a['diagrama'], a['ruta_codigo'], a.get('lenguaje', 'auto'))
+
+
+@tool('staruml_diagrama_a_codigo', 'Genera esqueletos de codigo limpios y tipados (Java, Python, TypeScript) listos para '
+      'implementar a partir de las clases, atributos, metodos y asociaciones de un diagrama de clases del .mdj.',
+      obj({'archivo': ARCHIVO, 'diagrama': S(description='Nombre o id del diagrama de clases'),
+           'lenguaje': S(enum=['java', 'python', 'typescript'], description='Lenguaje de destino (default java)'),
+           'carpeta_salida': S(description='Carpeta donde se guardaran los archivos de codigo generados')},
+          ['archivo', 'diagrama']), ro('Generar codigo'))
+def t_diagrama_a_codigo(a):
+    doc = M.Doc(a['archivo'])
+    return C.generar_codigo_desde_diagrama(doc, a['diagrama'], a.get('lenguaje', 'java'), a.get('carpeta_salida'))
+
+
+@tool('staruml_codigo_a_diagrama', 'Importa clases, atributos y metodos desde archivos de codigo fuente (Java, Python, TS) '
+      'y los crea dentro de un paquete y diagrama de clases del .mdj.',
+      obj({'archivo': ARCHIVO, 'ruta_codigo': S(description='Carpeta o archivo de codigo fuente a importar'),
+           'paquete': S(description='Nombre o id del paquete destino en el .mdj'),
+           'diagrama': S(description='Opcional: nombre del diagrama de clases donde agregarlas visualmente'),
+           'lenguaje': S(enum=['auto', 'java', 'python', 'typescript', 'csharp']),
+           'salida': SALIDA, 'forzar': FORZAR},
+          ['archivo', 'ruta_codigo', 'paquete']), rw('Importar codigo a diagrama'))
+def t_codigo_a_diagrama(a):
+    doc = M.Doc(a['archivo'])
+    info = C.importar_codigo_a_diagrama(doc, a['ruta_codigo'], a['paquete'], a.get('diagrama'), a.get('lenguaje', 'auto'))
+    return escribir(doc, a, info)
 
 
 # ---------------------------------------------------------------------------
