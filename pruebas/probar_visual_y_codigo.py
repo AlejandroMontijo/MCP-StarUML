@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # pruebas/probar_visual_y_codigo.py
-# Pruebas para las nuevas funciones estilo Figma MCP:
+# Pruebas para las nuevas funciones de visualizacion y codigo:
 # - Inspeccion visual de diagramas (staruml_ver_visual)
 # - Comparacion bidireccional contra codigo fuente (staruml_comparar_codigo)
 # - Generacion de esqueletos de codigo (staruml_diagrama_a_codigo)
@@ -58,7 +58,7 @@ def main():
         assert lfs_ok >= 23, f"Esperaba >=23 lifelines en codigo, obtuve {lfs_ok}"
         print(f" -> OK: Diagrama de secuencia analizado contra codigo. Lifelines en codigo: {lfs_ok}/25.")
         
-        # 4. Prueba de Visualizacion Estilo Figma (staruml_ver_visual)
+        # 4. Prueba de Visualizacion (staruml_ver_visual)
         print("\n[4] Probando staruml_ver_visual (Exportacion visual y generacion de imagen)...")
         salida_img = os.path.join(tmp_dir, 'cu_1_visual.png')
         res_visual = R.ver_visual(MDJ_REF, 'cu_1', salida=salida_img, max_lado=1200)
@@ -98,7 +98,7 @@ def main():
         assert 'numeroTelefono' in attrs_creados and 'estadoEnvio' in attrs_creados
         print(" -> OK: Codigo Java importado a .mdj con atributos y vista en diagrama.")
         
-        print("\nTODAS LAS PRUEBAS VISUALES Y DE CODIGO (ESTILO FIGMA MCP) PASARON EXITOSAMENTE (5/5)!")
+        print("\nTODAS LAS PRUEBAS VISUALES Y DE CODIGO PASARON EXITOSAMENTE (5/5)!")
         
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

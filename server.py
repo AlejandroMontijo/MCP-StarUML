@@ -170,10 +170,10 @@ def t_svg_recortar(a):
 
 
 # ---------------------------------------------------------------------------
-# Visualizacion e integracion con codigo (estilo Figma MCP)
+# Visualizacion e integracion con codigo
 # ---------------------------------------------------------------------------
 
-@tool('staruml_ver_visual', 'Visualiza un diagrama como imagen PNG de alta resolucion (estilo Figma MCP). '
+@tool('staruml_ver_visual', 'Visualiza un diagrama como imagen PNG de alta resolucion. '
       'Devuelve la imagen y sus metadatos directamente para que el asistente y el usuario puedan ver e inspeccionar '
       'visualmente el diseno.',
       obj({'archivo': ARCHIVO, 'diagrama': S(description='Nombre o id del diagrama a visualizar'),
@@ -200,7 +200,7 @@ def t_ver_visual(a):
 
 
 @tool('staruml_comparar_codigo', 'Compara exhaustivamente un diagrama UML (de clases o de secuencia) contra codigo fuente '
-      '(Java, Python, TypeScript, C#) al estilo del MCP de Figma. Analiza clases, atributos, metodos, tipos, '
+      '(Java, Python, TypeScript, C#). Analiza clases, atributos, metodos, tipos, '
       'asociaciones y llamadas de secuencia, calculando el porcentaje de alineacion y reportando discrepancias.',
       obj({'archivo': ARCHIVO, 'diagrama': S(description='Nombre o id del diagrama de clases o secuencia'),
            'ruta_codigo': S(description='Carpeta o archivo de codigo fuente a comparar'),

@@ -1,6 +1,6 @@
 # staruml_compare.py
 # Comparador de diagramas StarUML (.mdj) contra codigo fuente (Java, Python, TypeScript, C#)
-# y generador bidireccional (diagrama <-> codigo), similar al funcionamiento de Figma MCP.
+# y generador bidireccional (diagrama <-> codigo).
 
 import os
 import re
@@ -528,7 +528,7 @@ def escanear_codigo(ruta: str, lenguaje: str = 'auto') -> Dict[str, Any]:
     return resultado_clases
 
 # ---------------------------------------------------------------------------
-# Motor de comparacion: UML vs Codigo (Figma-style inspection & sync)
+# Motor de comparacion: UML vs Codigo
 # ---------------------------------------------------------------------------
 
 def comparar_diagrama_con_codigo(doc, nombre_diagrama: str, ruta_codigo: str, lenguaje: str = 'auto') -> Dict[str, Any]:

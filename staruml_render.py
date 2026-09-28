@@ -236,7 +236,7 @@ def recortar(svg, x=0, y=0, ancho=None, alto=None, salida=None, max_lado=None, t
 
 def ver_visual(mdj, diagrama, salida=None, max_lado=1600, formato='png', forzar=False):
     """Genera una imagen visual PNG de alta fidelidad del diagrama indicado,
-    optimizada para inspeccion visual e IA multimodal (estilo Figma MCP)."""
+    optimizada para inspeccion visual e IA multimodal."""
     doc = Doc(mdj)
     dg = doc.diagram(diagrama)
     dg_nombre = dg['name']

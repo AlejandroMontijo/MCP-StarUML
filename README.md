@@ -53,7 +53,7 @@ Requisitos:
 | `mdj_linea_etiqueta` | Mueve una etiqueta de una línea sin tocar sus puntos. |
 | `mdj_nota` | Crea o edita una nota; calcula su alto con el texto. |
 | `mdj_secuencia_generar` | Rehace un diagrama de secuencia completo a partir de lifelines y mensajes. |
-| `staruml_ver_visual` | Visualiza un diagrama como imagen PNG de alta resolución devuelta directamente en MCP (estilo Figma MCP). |
+| `staruml_ver_visual` | Visualiza un diagrama como imagen PNG de alta resolución devuelta directamente en MCP. |
 | `staruml_comparar_codigo` | Compara un diagrama UML contra código (Java, Python, TS, C#), calculando porcentaje de sincronización y discrepancias. |
 | `staruml_diagrama_a_codigo` | Genera esqueletos de código fuente limpios (Java, Python, TS) a partir de las clases de un diagrama. |
 | `staruml_codigo_a_diagrama` | Importa clases, atributos y métodos desde código fuente hacia el modelo y diagrama .mdj. |
@@ -96,7 +96,7 @@ antes de aplicarlo.
 }
 ```
 
-## Ejemplo: ver diagrama de manera visual (estilo Figma MCP)
+## Ejemplo: ver diagrama de manera visual
 
 ```json
 {
