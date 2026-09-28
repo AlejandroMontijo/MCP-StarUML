@@ -1,0 +1,75 @@
+# Reglas de trabajo con StarUML (.mdj)
+
+Salen de cómo trabajamos el proyecto de renta de maquinaria. El MCP las aplica solo;
+aquí están para que quien lo use sepa por qué hace lo que hace.
+
+## Archivo
+
+- El `.mdj` es JSON. Se lee y se guarda con Python, siempre así:
+  `json.dump(d, f, ensure_ascii=False, indent='\t')`. Con eso el archivo queda igual
+  que como lo guarda StarUML.
+- Antes de escribir se hace un respaldo (carpeta `respaldos/` del MCP, o la que diga
+  `STARUML_MCP_BACKUP_DIR`) y se compara byte por byte con el original.
+- **Si la aplicación de StarUML está abierta, no se escribe.** Si tiene cargada una
+  versión vieja y alguien guarda desde ahí, pisa los cambios. Se pide cerrarla (sin
+  guardar) o se usa `forzar` solo si se sabe que no tiene ese archivo abierto.
+- Para probar un cambio sin tocar el original, las herramientas de edición aceptan
+  `salida` (otro archivo).
+- Borrar una vista no borra el elemento: quedan relaciones fantasma. `mdj_borrar`
+  quita el elemento, lo que contiene, sus relaciones y todas sus vistas.
+- IDs con el formato de StarUML: 4 bytes cero + 6 bytes de timestamp en ms + 4
+  aleatorios, en base64 (20 caracteres).
+- Estereotipos de robustez como referencia (`$ref`) al estereotipo del perfil
+  (`boundary`, `control`, `entity`). Si van como texto, StarUML dibuja una caja tachada.
+- El diagrama que abre al cargar es el que tiene `defaultDiagram: true`.
+
+## Diagramas de clases
+
+- StarUML recalcula el primer y el último punto de cada línea: quedan donde la recta
+  del centro de la caja hacia el punto vecino cruza el borde. Para que un tramo salga
+  recto, el punto vecino tiene que alinearse con el centro de la caja.
+  `mdj_linea_ruta` calcula esos extremos igual que StarUML.
+- Si una línea tiene puntos puestos a mano por el equipo, no se recalculan: se mueven
+  solo sus etiquetas (`mdj_linea_etiqueta`, con `alpha` y `distance`).
+- Nada de espaciados idénticos ni alineaciones perfectas repetidas: se ve hecho por
+  máquina. Variar un poco posiciones y separaciones.
+- Notas: cada renglón de Arial 11 ocupa 11 px. `mdj_nota` calcula el alto solo.
+- Revisar siempre con `svg_revisar` después de exportar: líneas que cruzan notas o
+  cajas, líneas sobre etiquetas, etiquetas encimadas y texto que se sale de las notas.
+
+## Robustez (OOSE)
+
+- Un solo control por caso de uso.
+- actor -> boundary; boundary <-> control; control -> entity; entity -> entity solo si
+  existe la asociación; boundary -> actor externo (p. ej. un servicio de correo).
+- Control -> actor no es válido: se pone una boundary en medio.
+- Una boundary no habla con otra boundary ni con una entity.
+- Boundary y control sin atributos ni métodos. En análisis ninguna clase lleva métodos.
+- Una sola notación (la de íconos) en todo el proyecto.
+
+## Diagramas de secuencia
+
+- Cada mensaje: `UMLMessage` + `UMLSeqMessageView` con 3 `EdgeLabelView` (nombre
+  visible; estereotipo y propiedades ocultos) y 1 `UMLActivationView`. head = linePart
+  del destino, tail = linePart del origen, points `"xo:y;xt:y"`.
+- Sin `messageSort` es llamada síncrona; `"reply"` es respuesta. Sin replies de una
+  boundary al actor. Toda consulta a una entity lleva su reply.
+- StarUML numera por el orden del arreglo `messages`. Hacia la izquierda la etiqueta
+  queda abajo de la línea; hacia la derecha, arriba.
+- Espaciado entre mensajes: 29 a 36 px; 50 a 56 px cuando un mensaje a la izquierda va
+  seguido de uno a la derecha (si no, se enciman); 22 a 34 px extra entre flujos.
+- Activaciones con pila de llamadas: una lifeline sigue activa mientras atiende (manda
+  mensajes o recibe replies). Así cada mensaje sale de una caja.
+- Separación entre lifelines: al menos lo que mide la etiqueta más larga que viaja entre
+  ellas, más un margen. Si una etiqueta cae sobre una activación abierta, se baja el
+  mensaje.
+- Lifelines: height = fin - 40; linePart top = 106 y height = h - 66. El marco se ajusta
+  al contenido.
+- Una lifeline sin nombre con rol tipado se ve como ": Tipo".
+
+## Exportar y revisar
+
+- `staruml_exportar` usa el CLI (`StarUML image ... -f svg -s selector`) con límite de
+  tiempo. Diagramas con el mismo nombre se sobrescriben entre sí al exportar todos.
+- `svg_recortar` usa Chrome headless con un perfil propio y lo cierra al terminar;
+  funciona con rutas con espacios.
