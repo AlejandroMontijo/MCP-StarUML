@@ -17,10 +17,12 @@ PROTOCOLOS = ('2025-06-18', '2025-03-26', '2024-11-05')
 AQUI = os.path.dirname(os.path.abspath(__file__))
 
 INSTRUCCIONES = (
-    'Herramientas para leer, validar, editar y exportar archivos .mdj de StarUML sin abrir la aplicacion. '
+    'Herramientas para leer, validar, editar, exportar, visualizar en tiempo real y sincronizar con codigo '
+    'archivos .mdj de StarUML sin abrir la aplicacion. '
     'Las de edicion respaldan antes de escribir, no escriben si StarUML esta abierto y validan al terminar. '
-    'Llama a staruml_reglas para ver las convenciones (OOSE, secuencias, lineas). '
-    'Flujo tipico: mdj_resumen -> mdj_modelo / mdj_secuencia -> editar -> mdj_validar -> staruml_exportar -> svg_revisar.')
+    'Llama a staruml_reglas para ver las convenciones (UML, OOSE, secuencias, lineas y codigo). '
+    'Flujo tipico: mdj_resumen -> mdj_modelo / mdj_secuencia -> staruml_ver_visual -> staruml_comparar_codigo -> editar -> mdj_validar.')
+
 
 S = lambda **kw: {'type': 'string', **kw}
 N = lambda **kw: {'type': 'number', **kw}

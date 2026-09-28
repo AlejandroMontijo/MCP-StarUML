@@ -1,7 +1,6 @@
-# Reglas de trabajo con StarUML (.mdj)
+# Reglas y Convenciones de Modelado StarUML (.mdj)
 
-Salen de cómo trabajamos el proyecto de renta de maquinaria. El MCP las aplica solo;
-aquí están para que quien lo use sepa por qué hace lo que hace.
+Convenciones y estándares de buenas prácticas de análisis, diseño y arquitectura para proyectos StarUML (`.mdj`). El servidor MCP las aplica automáticamente para garantizar la integridad referencial, consistencia visual y cumplimiento de patrones de ingeniería de software (UML y OOSE).
 
 ## Archivo
 

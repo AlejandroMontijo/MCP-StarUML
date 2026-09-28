@@ -1,134 +1,187 @@
 # MCP StarUML
 
-Servidor MCP para trabajar archivos `.mdj` de StarUML desde Claude Code sin abrir la
-aplicación: leer el modelo, validarlo, editarlo con seguridad, generar diagramas de
-secuencia, exportar y revisar cómo se ven.
+Servidor de Protocolo de Contexto de Modelo (**MCP** - Model Context Protocol) para interactuar, inspeccionar, editar, renderizar y sincronizar archivos `.mdj` de **StarUML** directamente desde asistentes de IA (Claude Code, Claude Desktop, Cursor, Antigravity, etc.) sin necesidad de abrir la aplicación gráfica.
 
-Está hecho en Python puro (3.9 o más nuevo) y no necesita instalar nada: habla el
-protocolo MCP (JSON-RPC por stdio) directamente.
+Desarrollado en Python puro (3.9+), sin dependencias externas pesadas, comunicándose mediante el protocolo estándar MCP (JSON-RPC 2.0 por `stdio`).
 
-## Instalar en Claude Code
+---
+
+## Características Principales
+
+- **Inspección Visual en Tiempo Real:** Renderiza y entrega diagramas directamente en el chat en formato PNG de alta fidelidad para visión multimodal de la IA.
+- **Sincronización Bidireccional con Código:** Compara diagramas (Clases y Secuencias) contra bases de código en **Java, Python, TypeScript/JavaScript y C#**, calculando el porcentaje de alineación y reportando discrepancias.
+- **Generación de Código:** Genera esqueletos limpios y tipados a partir del diseño de clases y asociaciones.
+- **Ingeniería Inversa:** Importa clases, atributos y métodos desde código fuente hacia paquetes y diagramas del `.mdj`.
+- **Edición Segura y Confiable:** Respaldos automáticos antes de escribir, prevención de sobreescritura si la aplicación está abierta y validación de integridad referencial.
+- **Generador Inteligente de Secuencias:** Construye diagramas de secuencia completos con lifelines, ordenación automática, activación con pila de llamadas y cálculo de separación para evitar solapamiento de textos.
+
+---
+
+## Instalación y Configuración
+
+### 1. Claude Code (CLI)
 
 ```bash
-claude mcp add staruml -- python3 "/Users/alejandromontijo/Desktop/Diseño de sofware /MCP StarUML/server.py"
+claude mcp add staruml -- python3 "/ruta/absoluta/a/MCP-StarUML/server.py"
 ```
 
-Para que quede solo en este proyecto, se agrega `--scope project` (crea `.mcp.json`).
-Con `claude mcp list` se revisa que esté conectado. Después de agregarlo hay que abrir
-una sesión nueva de Claude Code.
+Para asociar el servidor únicamente al proyecto actual:
+```bash
+claude mcp add staruml --scope project -- python3 "/ruta/absoluta/a/MCP-StarUML/server.py"
+```
 
-Requisitos:
+Verifica la conexión con:
+```bash
+claude mcp list
+```
 
-- `python3`.
-- StarUML en `~/Applications` o `/Applications`, solo para exportar.
-- Google Chrome, solo para `svg_recortar`.
+### 2. Claude Desktop
 
-## Herramientas
+Agrega la configuración en tu archivo `claude_desktop_config.json`:
 
-| Herramienta | Qué hace |
-|---|---|
-| `staruml_estado` | Dice si StarUML está abierto y dónde están el CLI, Chrome y los respaldos. |
-| `staruml_reglas` | Devuelve las reglas de trabajo (`reglas.md`). |
-| `mdj_resumen` | Diagramas del archivo y cuántas clases hay por estereotipo. |
-| `mdj_modelo` | Clases, atributos, documentación, asociaciones con multiplicidades y roles. |
-| `mdj_secuencia` | Mensajes numerados de un diagrama de secuencia. |
-| `mdj_geometria` | Cajas y líneas de un diagrama con coordenadas e ids de vista. |
-| `mdj_buscar` | Busca elementos por nombre o tipo y da sus ids. |
-| `mdj_validar` | Ids duplicados, referencias colgantes, `_parent` y reglas OOSE. |
-| `mdj_diff` | Diferencias a nivel modelo entre dos `.mdj`. |
-| `staruml_exportar` | Exporta a SVG/PNG/PDF con el CLI de StarUML. |
-| `svg_revisar` | Busca en el SVG líneas sobre notas, cajas o etiquetas, textos encimados y etiquetas sobre activaciones. |
-| `svg_recortar` | Recorta una zona del SVG a PNG y la devuelve para verla. |
-| `mdj_respaldar` | Copia de respaldo verificada byte por byte. |
-| `mdj_clase_crear` | Crea una clase con estereotipo, atributos y documentación. |
-| `mdj_renombrar` | Cambia el nombre de un elemento y el de sus vistas. |
-| `mdj_documentacion` | Pone el campo Documentation. |
-| `mdj_atributos` | Deja la lista de atributos exacta y rehace su compartimento. |
-| `mdj_asociacion_crear` | Crea una asociación y, si se pide, la dibuja con su ruta. |
-| `mdj_asociacion_editar` | Cambia multiplicidad, rol, navegabilidad o extremo. |
-| `mdj_borrar` | Borra un elemento con sus relaciones y todas sus vistas. |
-| `mdj_vista_agregar` | Dibuja una clase o actor existente en un diagrama. |
-| `mdj_vista_mover` | Mueve o cambia el tamaño de una vista. |
-| `mdj_linea_ruta` | Pone la ruta de una línea y calcula sus extremos como StarUML. |
-| `mdj_linea_etiqueta` | Mueve una etiqueta de una línea sin tocar sus puntos. |
-| `mdj_nota` | Crea o edita una nota; calcula su alto con el texto. |
-| `mdj_secuencia_generar` | Rehace un diagrama de secuencia completo a partir de lifelines y mensajes. |
-| `staruml_ver_visual` | Visualiza un diagrama como imagen PNG de alta resolución devuelta directamente en MCP. |
-| `staruml_comparar_codigo` | Compara un diagrama UML contra código (Java, Python, TS, C#), calculando porcentaje de sincronización y discrepancias. |
-| `staruml_diagrama_a_codigo` | Genera esqueletos de código fuente limpios (Java, Python, TS) a partir de las clases de un diagrama. |
-| `staruml_codigo_a_diagrama` | Importa clases, atributos y métodos desde código fuente hacia el modelo y diagrama .mdj. |
-
-
-## Seguridad al escribir
-
-Todas las herramientas de edición:
-
-1. Se niegan a escribir si la aplicación de StarUML está abierta. Si tiene cargada una
-   versión vieja y alguien guarda, pisa los cambios. Solo con `forzar: true` escriben
-   igual.
-2. Hacen un respaldo antes de escribir, en `respaldos/` dentro de esta carpeta (o donde
-   diga la variable `STARUML_MCP_BACKUP_DIR`), y comprueban que quedó idéntico.
-3. Guardan con el mismo formato que StarUML (`ensure_ascii=False`, tabuladores).
-4. Validan el archivo al terminar y regresan el resultado.
-
-Con `salida` escriben en otro archivo y el original no se toca, para probar un cambio
-antes de aplicarlo.
-
-## Ejemplo: generar una secuencia
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
-  "archivo": "UML actualizado/Modelo.mdj",
-  "diagrama": "cu_1_FB",
+  "mcpServers": {
+    "staruml": {
+      "command": "python3",
+      "args": ["/ruta/absoluta/a/MCP-StarUML/server.py"]
+    }
+  }
+}
+```
+
+### Requisitos del Sistema
+
+- **Python 3.9** o superior.
+- **StarUML** instalado (macOS en `~/Applications` o `/Applications`, o comando `staruml` disponible en `PATH`), necesario para la exportación por CLI.
+- **Google Chrome** (opcional, para rasterizado y recorte PNG de alta fidelidad).
+
+---
+
+## Catálogo de Herramientas (30)
+
+### Inspección Visual y Renderizado
+| Herramienta | Descripción |
+|---|---|
+| `staruml_ver_visual` | Renderiza un diagrama a PNG de alta resolución y lo entrega en el protocolo MCP para inspección visual directa. |
+| `staruml_exportar` | Exporta diagramas a SVG, PNG, JPEG o PDF mediante el CLI de StarUML. |
+| `svg_revisar` | Detecta problemas de layout en SVG: líneas sobre cajas/notas/etiquetas, textos encimados y desbordes. |
+| `svg_recortar` | Recorta una región específica o redimensiona un SVG a PNG con Chrome headless. |
+
+### Sincronización e Integración con Código
+| Herramienta | Descripción |
+|---|---|
+| `staruml_comparar_codigo` | Compara un diagrama (Clases o Secuencia) contra código fuente (Java, Python, TS, C#). Devuelve métrica de sincronización (%) y elementos faltantes. |
+| `staruml_diagrama_a_codigo` | Genera esqueletos de código limpios y tipados a partir de las clases y relaciones de un diagrama. |
+| `staruml_codigo_a_diagrama` | Importa clases, atributos y métodos desde archivos de código fuente hacia el modelo y diagrama `.mdj`. |
+
+### Lectura, Consulta y Diagnóstico
+| Herramienta | Descripción |
+|---|---|
+| `staruml_estado` | Informa si StarUML está en ejecución y la ubicación del CLI, Chrome y respaldos. |
+| `staruml_reglas` | Devuelve las reglas y convenciones de modelado y arquitectura (`reglas.md`). |
+| `mdj_resumen` | Lista diagramas del archivo, vistas, diagrama por defecto y conteo por estereotipo. |
+| `mdj_modelo` | Extrae clases, atributos, métodos, documentación y asociaciones con roles y multiplicidades. |
+| `mdj_secuencia` | Extrae la secuencia ordenada de mensajes, lifelines, tipos y respuestas (replies). |
+| `mdj_geometria` | Coordenadas, dimensiones e identificadores de vistas de cajas y líneas de un diagrama. |
+| `mdj_buscar` | Búsqueda flexible de elementos por nombre, texto o tipo UML (`UMLClass`, `UMLAssociation`, etc.). |
+| `mdj_validar` | Valida integridad estructural (IDs duplicados, referencias rotas) y reglas OOSE/robustez. |
+| `mdj_diff` | Calcula diferencias semánticas y estructurales entre dos archivos `.mdj`. |
+
+### Edición Segura del Modelo
+| Herramienta | Descripción |
+|---|---|
+| `mdj_respaldar` | Crea una copia de respaldo verificada byte por byte. |
+| `mdj_clase_crear` | Crea clases o actores con estereotipo (`boundary`, `control`, `entity`), atributos y documentación. |
+| `mdj_renombrar` | Renombra un elemento y sincroniza automáticamente las etiquetas de todas sus vistas. |
+| `mdj_documentacion` | Actualiza la documentación o especificación de responsabilidades de un elemento. |
+| `mdj_atributos` | Sincroniza la lista exacta de atributos y actualiza su compartimento visual. |
+| `mdj_asociacion_crear` | Crea asociaciones con multiplicidades, roles, navegabilidad y trazado de ruta visual opcional. |
+| `mdj_asociacion_editar` | Modifica multiplicidades, roles, extremos o navegabilidad de una asociación existente. |
+| `mdj_borrar` | Borrado en cascada: elimina el elemento, sus elementos contenidos, relaciones y vistas asociadas. |
+| `mdj_vista_agregar` | Dibuja la vista de una clase o actor existente en un diagrama en notación estándar o icónica. |
+| `mdj_vista_mover` | Ajusta coordenadas y dimensiones de una vista de caja en un diagrama. |
+| `mdj_linea_ruta` | Define los puntos de quiebre de una línea calculando los extremos de conexión con las cajas. |
+| `mdj_linea_etiqueta` | Ajusta la posición de etiquetas de multiplicidad, rol o nombre (alpha y distance). |
+| `mdj_nota` | Crea o edita notas explicativas con cálculo automático de dimensiones según el texto. |
+| `mdj_secuencia_generar` | Genera o regenera por completo un diagrama de secuencia a partir de especificación de lifelines y mensajes. |
+
+---
+
+## Seguridad al Escribir
+
+Para prevenir corrupción accidental de archivos:
+
+1. **Detección de Proceso Activo:** Las herramientas de escritura se niegan a modificar el archivo si StarUML lo tiene abierto, evitando sobreescrituras accidentales desde la interfaz gráfica. (Se puede omitir conscientemente mediante `forzar: true`).
+2. **Respaldo Automático Previo:** Todo guardado genera un respaldo en la carpeta `respaldos/` (configurable mediante la variable de entorno `STARUML_MCP_BACKUP_DIR`) verificado byte a byte.
+3. **Formato Nativo:** Mantiene el formato idéntico al de StarUML (`ensure_ascii=False`, indentación por tabuladores).
+4. **Validación Posterior:** Al concluir la escritura, el archivo se revalida estructuralmente.
+5. **Simulación con Archivo Alternativo:** Con el parámetro opcional `salida: "otro_archivo.mdj"`, los cambios se escriben en una copia sin alterar el archivo original.
+
+---
+
+## Ejemplos de Uso
+
+### 1. Visualizar un Diagrama en el Chat
+```json
+{
+  "archivo": "ruta/al/modelo.mdj",
+  "diagrama": "DiagramaPrincipal",
+  "salida": "renders/diagrama.png",
+  "max_lado": 1600
+}
+```
+
+### 2. Comparar Diagrama contra Código Fuente
+```json
+{
+  "archivo": "ruta/al/modelo.mdj",
+  "diagrama": "DiagramaClases",
+  "ruta_codigo": "src/main/java/com/miempresa/modelo",
+  "lenguaje": "java"
+}
+```
+
+### 3. Generar Esqueletos de Código desde el Modelo
+```json
+{
+  "archivo": "ruta/al/modelo.mdj",
+  "diagrama": "DiagramaClases",
+  "lenguaje": "typescript",
+  "carpeta_salida": "src/models"
+}
+```
+
+### 4. Generar un Diagrama de Secuencia
+```json
+{
+  "archivo": "ruta/al/modelo.mdj",
+  "diagrama": "SecuenciaAutenticacion",
   "lifelines": [
-    {"clave": "asesor", "tipo": "Asesor de Renta"},
-    {"clave": "bc", "tipo": "BC_RegistroSolicitudRenta"},
-    {"clave": "ctrl", "tipo": "ControlContratacionRenta"},
-    {"clave": "cliente", "tipo": "Cliente"}
+    {"clave": "usr", "tipo": "Usuario"},
+    {"clave": "ui", "tipo": "LoginBoundary"},
+    {"clave": "ctrl", "tipo": "AuthControl"},
+    {"clave": "repo", "tipo": "UsuarioRepository"}
   ],
   "mensajes": [
-    {"de": "asesor", "a": "bc", "nombre": "ingresarRFC(rfc)", "flujo": "F1"},
-    {"de": "bc", "a": "ctrl", "nombre": "buscarCliente(rfc)", "flujo": "F1"},
-    {"de": "ctrl", "a": "cliente", "nombre": "buscarCliente(rfc)", "flujo": "F1"},
-    {"de": "cliente", "a": "ctrl", "nombre": "clienteEncontrado", "reply": true, "flujo": "F1"},
-    {"de": "ctrl", "a": "bc", "nombre": "mostrarDatosCliente(cliente)", "flujo": "F1"}
+    {"de": "usr", "a": "ui", "nombre": "ingresarCredenciales(user, pass)"},
+    {"de": "ui", "a": "ctrl", "nombre": "autenticar(user, pass)"},
+    {"de": "ctrl", "a": "repo", "nombre": "buscarPorUsuario(user)"},
+    {"de": "repo", "a": "ctrl", "nombre": "datosUsuario", "reply": true},
+    {"de": "ctrl", "a": "ui", "nombre": "mostrarSesionIniciada()"}
   ]
 }
 ```
 
-## Ejemplo: ver diagrama de manera visual
+---
 
-```json
-{
-  "archivo": "pruebas/proyecto_reconstruido.mdj",
-  "diagrama": "cu_1_FB",
-  "salida": "renders/cu_1_FB.png",
-  "max_lado": 1600
-}
-```
-Devuelve directamente en el chat el bloque de imagen PNG de alta fidelidad y la metadata de resolución y elementos para que el asistente pueda ver el diseño con visión multimodal.
+## Estructura del Repositorio
 
-## Ejemplo: comparar diagrama con código fuente
-
-```json
-{
-  "archivo": "pruebas/proyecto_reconstruido.mdj",
-  "diagrama": "cu_1",
-  "ruta_codigo": "src/main/java/com/empresa/modelo",
-  "lenguaje": "java"
-}
-```
-Analiza las clases, atributos, tipos, métodos, multiplicidades y llamadas, reportando:
-- Porcentaje de sincronización / alineación.
-- Clases y métodos que faltan por implementar en el código.
-- Inconsistencias de tipos de datos o relaciones no mapeadas.
-
-
-## Archivos
-
-- `server.py`: el servidor MCP (protocolo y definición de herramientas).
-- `staruml_mdj.py`: leer, validar y editar el `.mdj`.
-- `staruml_render.py`: exportar, revisar el SVG, recortar a PNG y visualización de alta resolución.
-- `staruml_compare.py`: comparador de diagramas contra código (Java, Python, TypeScript, C#) y generador de esqueletos.
-- `reglas.md`: reglas de trabajo (convenciones OOSE, secuencias, líneas y código).
-
+- `server.py`: Servidor central MCP (protocolo JSON-RPC 2.0 y registro de herramientas).
+- `staruml_mdj.py`: Motor de lectura, manipulación del árbol JSON, validación y edición segura del formato `.mdj`.
+- `staruml_render.py`: Módulo de exportación CLI, rasterizado de alta calidad e inspección de SVG.
+- `staruml_compare.py`: Motor de sincronización, escaneo de código fuente (Java, Python, TypeScript, C#) e ingeniería inversa.
+- `reglas.md`: Manual de convenciones de arquitectura, buenas prácticas OOSE y lineamientos de modelado.
