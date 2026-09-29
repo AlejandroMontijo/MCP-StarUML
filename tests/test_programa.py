@@ -258,3 +258,16 @@ def test_clases_que_parecen_pruebas_y_constantes_de_interfaz(tmp_path):
     assert r['asociaciones'] == 1  # Test -> Alumno; la constante de la interfaz no es asociacion
     config = por_nombre(doc, 'Config')
     assert [(a['name'], a.get('isStatic')) for a in config['attributes']] == [('PREDETERMINADO', True), ('MAX', True)]
+
+
+def test_clases_de_diseno_con_metodos_no_son_problema_oose(programa, modelo, tmp_path):
+    mdj = str(tmp_path / 'diseno.mdj')
+    ok(tool('staruml_programa_a_diagrama', archivo=mdj, ruta_codigo=programa))
+    assert ok(tool('mdj_validar', archivo=mdj))['oose']['problemas'] == []
+    # en las clases de analisis la regla sigue
+    doc = M.Doc(modelo)
+    cuenta = doc.find('Cuenta')
+    cuenta['operations'] = [{'_type': 'UMLOperation', '_id': doc.new_id(), '_parent': {'$ref': cuenta['_id']}, 'name': 'validar'}]
+    doc.reindex()
+    doc.save(backup=False)
+    assert any('Cuenta (entity) tiene metodos' in p for p in ok(tool('mdj_validar', archivo=modelo))['oose']['problemas'])

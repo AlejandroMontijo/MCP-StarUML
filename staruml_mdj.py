@@ -599,10 +599,11 @@ def reglas_oose(doc):
     for o in doc.ids.values():
         if o and o['_type'] in ('UMLClass', 'UMLActor'):
             kinds[o['_id']] = doc.kind(o)
-    # atributos y metodos
+    # atributos y metodos: la regla es de las clases de analisis; las de diseno (sin estereotipo de robustez, p. ej.
+    # las que dibuja staruml_programa_a_diagrama desde un programa) si llevan metodos
     for i, k in kinds.items():
         o = doc.ids[i]
-        if o.get('operations'):
+        if o.get('operations') and k in ('boundary', 'control', 'entity', 'actor'):
             prob.append(f'{o.get("name", "(sin nombre)")} ({k}) tiene metodos; en analisis no se ponen metodos')
         if k in ('boundary', 'control') and o.get('attributes'):
             prob.append(f'{o.get("name", "(sin nombre)")} ({k}) tiene atributos; boundary y control van sin atributos')

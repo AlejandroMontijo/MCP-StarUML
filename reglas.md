@@ -45,7 +45,9 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
   existe la asociación; boundary -> actor externo (p. ej. un servicio de correo).
 - Control -> actor no es válido: se pone una boundary en medio.
 - Una boundary no habla con otra boundary ni con una entity.
-- Boundary y control sin atributos ni métodos. En análisis ninguna clase lleva métodos.
+- Boundary y control sin atributos ni métodos. En análisis ninguna clase lleva métodos: `mdj_validar`
+  lo revisa en las clases con estereotipo de robustez (boundary, control, entity) y en los actores; las
+  clases de diseño, sin esos estereotipos, sí llevan métodos.
 - Una sola notación (la de íconos) en todo el proyecto. `mdj_validar` avisa de las vistas de
   robustez que no la usan, de los estereotipos guardados como texto y de las cajas encimadas.
 - Cada caso de uso se analiza en un paquete con su mismo nombre (sin importar acentos ni mayúsculas).

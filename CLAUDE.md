@@ -78,7 +78,7 @@ MCP StarUML/
 - Render portable: StarUML y Chrome se buscan en rutas típicas, `PATH` y `STARUML_MCP_STARUML_BIN` / `STARUML_MCP_CHROME_BIN`; sin `sips` ni `perl`.
 - Fase 3 completa: bitácora por `stderr` (`STARUML_MCP_LOG_LEVEL`), coherencia caso de uso ↔ paquete de robustez, generador C#, parsers de Kotlin y Go, auto-mensajes en `mdj_secuencia_generar`, y lectura (`mdj_comportamiento`) y validación de diagramas de estados y de actividades.
 - La geometría de los auto-mensajes sigue la forma estándar de UML; falta confirmarla abriendo el archivo en StarUML.
-- `staruml_programa_a_diagrama` (v2.1.0) dibuja el diagrama de clases de un programa Java completo. Las vistas de enumeración y de realización de interfaz siguen el metamodelo de StarUML pero solo se confirman con `tests/test_staruml_real.py` en una máquina con StarUML. Como la regla de análisis de `reglas_oose` se mantiene, `mdj_validar` marca los métodos de esas clases de diseño.
+- `staruml_programa_a_diagrama` (v2.1.0) dibuja el diagrama de clases de un programa Java completo. Las vistas de enumeración y de realización de interfaz siguen el metamodelo de StarUML pero solo se confirman con `tests/test_staruml_real.py` en una máquina con StarUML. La regla "en análisis no se ponen métodos" de `reglas_oose` aplica solo a boundary, control, entity y actores, así que esas clases de diseño no se marcan.
 
 ## 4. Convenciones y Reglas Inquebrantables
 
@@ -96,7 +96,7 @@ MCP StarUML/
    - Boundary solo interactúa con Actores y Control (nunca boundary con boundary ni boundary con entity).
    - Control interactúa con Boundary y Entity.
    - Entity solo interactúa con Entity si existe asociación explícita.
-   - Boundary y Control **sin atributos ni métodos** en fase de análisis.
+   - Boundary y Control **sin atributos ni métodos** en fase de análisis (la regla de métodos aplica a las clases de robustez y actores; las de diseño sí llevan métodos).
 
 ---
 
