@@ -103,7 +103,9 @@ MCP StarUML/
 Para verificar el correcto funcionamiento del servidor y herramientas en local:
 
 ```bash
-# 0. Suite versionada completa (protocolo, integridad, edición, código, render, plataforma y modelo real si está en pruebas/)
+# 0. Suite versionada completa (protocolo, integridad, edición, código, render, plataforma y modelo real si está en pruebas/).
+#    Con StarUML instalado, tests/test_staruml_real.py además exporta con el CLI verdadero y deja lo que hay que
+#    revisar a ojo en pruebas/verificacion_staruml/
 python3 -m pytest tests -q
 
 # 1. Probar suite completa del servidor (41 pruebas de integridad, OOSE, lectura, escritura y CLI)

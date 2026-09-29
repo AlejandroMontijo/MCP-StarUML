@@ -357,8 +357,14 @@ PYTHONIOENCODING=cp1252 python3 server.py
 - Las referencias adelantadas de Python (`List["Pedido"]`) quedaban con comillas en el tipo.
 - Con el modelo real, los identificadores `BC_*` perdían el guion bajo al generar código, y las asociaciones hacia actores generaban campos de clases inexistentes.
 
-**Pendiente (verificación manual, no bugs)**
-- La exportación real con StarUML y `svg_revisar` sobre SVG auténtico solo se probaron con dobles; conviene una corrida en una máquina con StarUML.
-- La geometría de los auto-mensajes sigue la forma estándar de UML y no hay auto-mensajes en el modelo real para compararla: falta abrir uno generado en StarUML y confirmar que se ve igual.
-- Las reglas de estados y actividades se probaron con modelos sintéticos que siguen el metamodelo de StarUML; conviene validarlas con un diagrama de estados o de actividades hecho en la aplicación.
+**Pendiente (verificación en una máquina con StarUML)**
+
+`tests/test_staruml_real.py` automatiza las tres revisiones y se omite donde no hay StarUML (en CI y en el entorno
+donde se desarrolló, cuya red no permite descargarlo). Con StarUML instalado corre sola con `python3 -m pytest tests -q`
+y deja lo que hay que mirar en `pruebas/verificacion_staruml/`:
+- Exportación real y `svg_revisar` sobre SVG auténtico: exporta todos los diagramas del modelo real y revisa cada SVG.
+- Auto-mensajes: exporta una secuencia generada con dos auto-mensajes, la revisa y deja el SVG, el PNG y el `.mdj`
+  para compararlos abriéndolo en StarUML.
+- Estados y actividades: con un diagrama dibujado en StarUML y guardado en `pruebas/`, comprueba que cada
+  transición o flujo une elementos reconocidos y guarda la lectura y los avisos de las reglas.
 - Generadores de Kotlin y Go (hoy solo se leen) si se necesitan.

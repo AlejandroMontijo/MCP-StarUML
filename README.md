@@ -218,6 +218,10 @@ python -m pytest tests -q
 ```
 
 - Sin StarUML ni Chrome las pruebas que los necesitan se omiten solas; la exportación se prueba con un CLI de StarUML simulado (`tests/staruml_falso.py`).
-- Si están `javac` y `tsc`, se compila de verdad el código generado; el de Python siempre se importa.
+- Si están `javac`, `tsc` y `dotnet`, se compila de verdad el código generado; el de Python siempre se importa.
+- **Con StarUML instalado**, `tests/test_staruml_real.py` exporta con el CLI verdadero: una secuencia generada con
+  auto-mensajes y todos los diagramas del modelo real, revisando cada SVG con `svg_revisar`. También lee los
+  diagramas de estados y de actividades que hayas dibujado en StarUML y guardado en `pruebas/`. Si existe la carpeta
+  `pruebas/`, deja los SVG, PNG e informes en `pruebas/verificacion_staruml/` para revisarlos a ojo.
 - **Modelo real propio:** copia tu `.mdj` a `pruebas/` (carpeta ignorada por git) o define `STARUML_MCP_MODELO_REAL`; `tests/test_modelo_real.py` lo usa automáticamente (siempre sobre copias).
 - La integración continua (`.github/workflows/pruebas.yml`) corre la suite en macOS, Linux y Windows con Python 3.9 y 3.12.
