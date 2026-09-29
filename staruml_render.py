@@ -5,6 +5,7 @@
 import glob
 import hashlib
 import json
+import logging
 import os
 import pathlib
 import re
@@ -18,6 +19,8 @@ import zlib
 from html import unescape
 
 from staruml_mdj import Doc, MdjError, staruml_cli, chrome_bin
+
+log = logging.getLogger('staruml_mcp.render')
 
 
 def _timeout(variable, defecto):
@@ -39,10 +42,14 @@ def _nombre_archivo(nombre):
 def _correr(cmd, timeout):
     """Ejecuta el CLI con limite de tiempo. Si se pasa, mata tambien a sus procesos hijos (Electron)."""
     kw = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {'start_new_session': True}
+    log.debug('ejecutando (limite %s s): %s', timeout, ' '.join(cmd))
+    inicio = time.monotonic()
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors='replace', **kw)
     try:
         out, err = p.communicate(timeout=timeout)
+        log.debug('termino con codigo %s en %.1f s', p.returncode, time.monotonic() - inicio)
     except subprocess.TimeoutExpired:
+        log.warning('se paso del limite de %s s; se mata el grupo de procesos: %s', timeout, ' '.join(cmd))
         if os.name == 'nt':
             subprocess.run(['taskkill', '/T', '/F', '/PID', str(p.pid)], capture_output=True)
         else:
@@ -324,6 +331,7 @@ def recortar(svg, x=0, y=0, ancho=None, alto=None, salida=None, max_lado=None, t
                f'--window-size={vw},{vh + 200}', '--hide-scrollbars', '--no-first-run', '--no-default-browser-check']
         if hasattr(os, 'geteuid') and os.geteuid() == 0:
             cmd.append('--no-sandbox')  # Chrome no arranca como root sin esto (contenedores, CI)
+        log.debug('captura con Chrome (%sx%s, limite %s s): %s', vw, vh, timeout, ' '.join(cmd))
         p = subprocess.Popen(cmd + [pathlib.Path(html).as_uri()], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         t0 = time.time()
         try:
@@ -342,6 +350,7 @@ def recortar(svg, x=0, y=0, ancho=None, alto=None, salida=None, max_lado=None, t
             if shutil.which('pkill'):
                 subprocess.run(['pkill', '-f', prof], capture_output=True)
         if not os.path.exists(png) or os.path.getsize(png) == 0:
+            log.warning('Chrome no genero la imagen en %.1f s', time.time() - t0)
             raise MdjError('Chrome no genero la imagen')
         with open(png, 'rb') as f:
             data = _png_primeras_filas(f.read(), vh)

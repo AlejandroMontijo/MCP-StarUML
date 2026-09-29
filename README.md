@@ -70,6 +70,7 @@ Agrega la configuración en tu archivo `claude_desktop_config.json`:
 | `STARUML_MCP_CHROME_BIN` | — | Ruta de Chrome/Chromium/Edge. |
 | `STARUML_MCP_EXPORT_TIMEOUT` | `150` | Segundos máximos de una exportación por CLI. |
 | `STARUML_MCP_CHROME_TIMEOUT` | `30` | Segundos máximos de un rasterizado con Chrome. |
+| `STARUML_MCP_LOG_LEVEL` | `WARNING` | Nivel de la bitácora por `stderr` (`DEBUG`, `INFO`, `WARNING`, `ERROR`). En `DEBUG` registra cada herramienta con sus argumentos y los comandos externos; en `INFO`, tiempos y respaldos. |
 | `STARUML_MCP_ALLOWED_DIRS` | — | Carpetas permitidas, separadas por `:` (`;` en Windows). Si se define, ninguna ruta de lectura o escritura puede quedar fuera. |
 
 Las rutas relativas de `salida`, `carpeta`, `carpeta_salida` y `ruta_codigo` se resuelven desde la carpeta del `.mdj`.
@@ -103,7 +104,7 @@ Las rutas relativas de `salida`, `carpeta`, `carpeta_salida` y `ruta_codigo` se 
 | `mdj_secuencia` | Extrae la secuencia ordenada de mensajes, lifelines, tipos y respuestas (replies). |
 | `mdj_geometria` | Coordenadas, dimensiones e identificadores de vistas de cajas y líneas de un diagrama. |
 | `mdj_buscar` | Búsqueda flexible de elementos por nombre, texto o tipo UML (`UMLClass`, `UMLAssociation`, etc.). |
-| `mdj_validar` | Valida integridad estructural (IDs duplicados, referencias rotas) y reglas OOSE/robustez, notación de íconos, estereotipos guardados como texto y cajas encimadas. |
+| `mdj_validar` | Valida integridad estructural (IDs duplicados, referencias rotas) y reglas OOSE/robustez, notación de íconos, estereotipos guardados como texto, cajas encimadas y coherencia entre cada caso de uso y su paquete de análisis. |
 | `mdj_diff` | Calcula diferencias semánticas y estructurales entre dos archivos `.mdj`. |
 
 ### Edición Segura del Modelo

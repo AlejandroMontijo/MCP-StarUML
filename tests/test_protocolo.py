@@ -166,3 +166,44 @@ def test_escenario_completo_por_stdio(tmp_path):
     for nombre in ('staruml_estado', 'staruml_reglas'):
         assert not c.llamar(nombre)[0]
     assert 'Traceback' not in c.cerrar()
+
+
+def _stderr_de(env, *acciones):
+    c = ClienteMCP(env=env)
+    c.pedir('initialize', {'protocolVersion': '2025-06-18'})
+    respuestas = [c.pedir('tools/call', {'name': n, 'arguments': a}) for n, a in acciones]
+    return respuestas, c.cerrar()
+
+
+def test_bitacora_por_stderr_segun_nivel(tmp_path):
+    f = str(tmp_path / 'm.mdj')
+    guardar_json(proyecto_vacio(), f)
+    acciones = [('mdj_resumen', {'archivo': f}), ('mdj_resumen', {'archivo': str(tmp_path / 'no_existe.mdj')})]
+    # por omision (WARNING) no hay ruido en stderr
+    r, err = _stderr_de({'STARUML_MCP_LOG_LEVEL': ''}, *acciones)
+    assert all('result' in x for x in r) and err == ''
+    # en DEBUG se ven las llamadas con sus argumentos, el tiempo y los errores; stdout sigue siendo solo JSON-RPC
+    r, err = _stderr_de({'STARUML_MCP_LOG_LEVEL': 'debug'}, *acciones)
+    assert r[0]['result']['isError'] is False and r[1]['result']['isError'] is True
+    assert 'DEBUG mdj_resumen {"archivo"' in err and 'INFO mdj_resumen: ok en' in err
+    assert 'no_existe.mdj' in err
+    # un nivel invalido se avisa y se usa WARNING
+    _, err = _stderr_de({'STARUML_MCP_LOG_LEVEL': 'verboso'}, *acciones)
+    assert "'VERBOSO' no es un nivel valido" in err and 'mdj_resumen: ok' not in err
+
+
+def test_error_inesperado_deja_traza_en_stderr(monkeypatch, capsys):
+    t = next(t for t in S.TOOLS if t['name'] == 'mdj_resumen')
+
+    def revienta(a):
+        raise ZeroDivisionError('division')
+    monkeypatch.setitem(t, 'fn', revienta)
+    S.configurar_log()
+    try:
+        r = S.llamar_herramienta({'name': 'mdj_resumen', 'arguments': {'archivo': 'x.mdj'}})
+    finally:
+        S.log.handlers.clear()
+        S.log.propagate = True
+    assert r['isError'] and 'ZeroDivisionError' in r['content'][0]['text']
+    err = capsys.readouterr().err
+    assert 'ERROR mdj_resumen: error inesperado' in err and 'Traceback' in err and 'x.mdj' in err

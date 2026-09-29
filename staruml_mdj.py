@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import time
+import unicodedata
 from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -506,6 +507,91 @@ def validar(doc, oose=True):
     return res
 
 
+def _clave_nombre(nombre):
+    """Nombre comparable: sin acentos, sin distinguir mayusculas y con espacios normalizados."""
+    t = unicodedata.normalize('NFKD', nombre or '')
+    return ' '.join(''.join(c for c in t if not unicodedata.combining(c)).casefold().split())
+
+
+def _consistencia_casos_de_uso(doc, kinds):
+    """Avisos de coherencia entre cada caso de uso y el paquete de analisis homonimo (su diagrama de robustez):
+    que el paquete tenga control y boundaries, que cada actor del caso de uso tenga una boundary del paquete y que
+    las boundaries no atiendan a actores ajenos al caso de uso. Solo aplica si el modelo sigue esa convencion
+    (al menos un caso de uso con paquete del mismo nombre)."""
+    casos = [o for o in doc.ids.values() if o and o['_type'] == 'UMLUseCase']
+    paquetes = {}
+    for o in doc.ids.values():
+        if o and o['_type'] == 'UMLPackage':
+            paquetes.setdefault(_clave_nombre(o.get('name')), []).append(o)
+    if not casos or not any(_clave_nombre(u.get('name')) in paquetes for u in casos):
+        return []
+
+    def clases_de(pk):
+        pila, out = list(pk.get('ownedElements', [])), []
+        while pila:
+            e = pila.pop()
+            if e['_type'] == 'UMLPackage':
+                pila.extend(e.get('ownedElements', []))
+            elif e['_type'] in ('UMLClass', 'UMLActor'):
+                out.append(e['_id'])
+        return out
+
+    vecinos = {}  # id -> ids asociados
+    padres = {}  # actor -> actores generales
+    for o in doc.ids.values():
+        if not o:
+            continue
+        if o['_type'] == 'UMLAssociation':
+            a, b = o['end1']['reference'].get('$ref'), o['end2']['reference'].get('$ref')
+            vecinos.setdefault(a, set()).add(b)
+            vecinos.setdefault(b, set()).add(a)
+        elif o['_type'] == 'UMLGeneralization' and isinstance(o.get('source'), dict) and isinstance(o.get('target'), dict):
+            padres.setdefault(o['source'].get('$ref'), set()).add(o['target'].get('$ref'))
+
+    def linaje(i):
+        # el actor, sus generalizaciones y sus especializaciones; los actores duplicados se reconocen por nombre
+        vistos, pila = set(), [i]
+        while pila:
+            x = pila.pop()
+            if x not in vistos:
+                vistos.add(x)
+                pila.extend(padres.get(x, ()))
+                pila.extend(h for h, ps in padres.items() if x in ps)
+        return {_clave_nombre(doc.name_of(x)) for x in vistos}
+
+    avisos, sin_paquete = [], []
+    for u in casos:
+        pks = paquetes.get(_clave_nombre(u.get('name')))
+        if not pks:
+            sin_paquete.append(u.get('name', '(sin nombre)'))
+            continue
+        ids = [i for pk in pks for i in clases_de(pk)]
+        tag = f'Caso de uso "{u.get("name")}"'
+        if not any(kinds.get(i) == 'control' for i in ids):
+            avisos.append(f'{tag}: su paquete de analisis no tiene clase control')
+        boundaries = [i for i in ids if kinds.get(i) == 'boundary']
+        if not boundaries:
+            avisos.append(f'{tag}: su paquete de analisis no tiene boundaries')
+            continue
+        actores_cu = [i for i in vecinos.get(u['_id'], ()) if kinds.get(i) == 'actor']
+        claves_cu = set().union(*(linaje(a) for a in actores_cu)) if actores_cu else set()
+        atendidos = {}
+        for b in boundaries:
+            for a in vecinos.get(b, ()):
+                if kinds.get(a) == 'actor':
+                    atendidos.setdefault(a, []).append(doc.name_of(b))
+        claves_atendidas = set().union(*(linaje(a) for a in atendidos)) if atendidos else set()
+        for a in actores_cu:
+            if not linaje(a) & claves_atendidas:
+                avisos.append(f'{tag}: el actor {doc.name_of(a)} participa en el caso de uso pero ninguna boundary de su paquete se asocia con el')
+        for a, bs in atendidos.items():
+            if not linaje(a) & claves_cu:
+                avisos.append(f'{tag}: el actor {doc.name_of(a)} se asocia con {", ".join(sorted(bs))} pero no participa en el caso de uso')
+    if sin_paquete:
+        avisos.append(f'{len(sin_paquete)} caso(s) de uso sin paquete de analisis del mismo nombre: {sorted(sin_paquete)}')
+    return avisos
+
+
 def reglas_oose(doc):
     prob, avisos = [], []
     kinds = {}
@@ -544,6 +630,7 @@ def reglas_oose(doc):
                 prob.append(f'Asociacion control--actor: {nm} (debe pasar por una boundary)')
             elif par == {'entity', 'actor'}:
                 prob.append(f'Asociacion entity--actor: {nm}')
+    avisos.extend(_consistencia_casos_de_uso(doc, kinds))
     # estereotipos como texto (StarUML dibuja una caja tachada) y una sola notacion (iconos) para robustez
     for o in doc.ids.values():
         if o and o['_type'] == 'UMLClass' and isinstance(o.get('stereotype'), str) and o['stereotype'] in ('boundary', 'control', 'entity'):

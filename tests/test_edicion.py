@@ -146,6 +146,65 @@ def test_avisos_oose_al_crear_asociacion(modelo):
 
 # --- crear actores, paquetes y diagramas ---
 
+def _avisos_cu(path):
+    return [a for a in M.reglas_oose(M.Doc(path))['avisos'] if 'caso' in a.lower()]
+
+
+def test_consistencia_de_caso_de_uso_con_su_paquete_de_robustez(modelo):
+    doc = M.Doc(modelo)
+    raiz = next(o for o in doc.ids.values() if o and o['_type'] == 'UMLModel')
+    # el caso de uso se llama como el paquete de robustez (sin acentos ni mayusculas de por medio)
+    uc = {'_type': 'UMLUseCase', '_id': doc.new_id(), '_parent': {'$ref': raiz['_id']}, 'name': 'ANÁLISIS'}
+    raiz['ownedElements'].append(uc)
+    doc.reindex()
+    usuario = doc.find('Usuario')
+    asoc = M.asociacion_crear(doc, usuario, uc)
+    doc.save(backup=False)
+    assert _avisos_cu(modelo) == []
+    assert ok(tool('mdj_validar', archivo=modelo))['oose'] == {'problemas': [], 'avisos': []}
+
+    # un actor del caso de uso sin boundary, y una boundary que atiende a un actor ajeno al caso de uso
+    doc = M.Doc(modelo)
+    M.borrar(doc, doc.get(asoc['_id']))
+    admin = {'_type': 'UMLActor', '_id': doc.new_id(), '_parent': {'$ref': raiz['_id']}, 'name': 'Administrador'}
+    doc.get(raiz['_id'])['ownedElements'].append(admin)
+    doc.reindex()
+    M.asociacion_crear(doc, admin, doc.get(uc['_id']))
+    doc.save(backup=False)
+    avisos = _avisos_cu(modelo)
+    assert len(avisos) == 2, avisos
+    assert any('Administrador participa' in a for a in avisos)
+    assert any('Usuario se asocia con Pantalla Autenticación pero no participa' in a for a in avisos)
+
+    # si Usuario especializa a Administrador, participa por herencia
+    doc = M.Doc(modelo)
+    gen = {'_type': 'UMLGeneralization', '_id': doc.new_id(), '_parent': {'$ref': usuario['_id']},
+           'source': {'$ref': usuario['_id']}, 'target': {'$ref': admin['_id']}}
+    doc.get(usuario['_id']).setdefault('ownedElements', []).append(gen)
+    doc.reindex()
+    doc.save(backup=False)
+    assert _avisos_cu(modelo) == []
+
+    # sin control en el paquete, y otro caso de uso aun sin analizar
+    doc = M.Doc(modelo)
+    doc.get(raiz['_id'])['ownedElements'].append({'_type': 'UMLUseCase', '_id': doc.new_id(),
+                                                   '_parent': {'$ref': raiz['_id']}, 'name': 'Consultar saldo'})
+    doc.reindex()
+    doc.save(backup=False)
+    ok(tool('mdj_borrar', archivo=modelo, elemento='Control Autenticación', forzar=True))
+    avisos = _avisos_cu(modelo)
+    assert any('no tiene clase control' in a for a in avisos), avisos
+    assert any("1 caso(s) de uso sin paquete de analisis del mismo nombre: ['Consultar saldo']" in a for a in avisos), avisos
+
+
+def test_sin_convencion_de_paquetes_no_hay_avisos_de_casos_de_uso(modelo):
+    doc = M.Doc(modelo)
+    raiz = next(o for o in doc.ids.values() if o and o['_type'] == 'UMLModel')
+    raiz['ownedElements'].append({'_type': 'UMLUseCase', '_id': doc.new_id(), '_parent': {'$ref': raiz['_id']}, 'name': 'Iniciar sesión'})
+    doc.reindex()
+    doc.save(backup=False)
+    assert _avisos_cu(modelo) == []
+
 def test_crear_actor_paquete_y_diagramas(vacio):
     ok(tool('mdj_paquete_crear', archivo=vacio, nombre='Diseño'))
     a = ok(tool('mdj_clase_crear', archivo=vacio, paquete='Diseño', nombre='Servicio de Correo', estereotipo='actor'))

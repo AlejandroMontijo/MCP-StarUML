@@ -3,10 +3,11 @@
 #   claude mcp add staruml -- python3 "/ruta/a/MCP StarUML/server.py"
 import base64
 import json
+import logging
 import math
 import os
 import sys
-import traceback
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import staruml_mdj as M          # noqa: E402
@@ -16,6 +17,8 @@ import staruml_compare as C      # noqa: E402
 VERSION = '2.0.0'
 PROTOCOLOS = ('2025-06-18', '2025-03-26', '2024-11-05')
 AQUI = os.path.dirname(os.path.abspath(__file__))
+NIVELES_LOG = ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
+log = logging.getLogger('staruml_mcp')
 
 INSTRUCCIONES = (
     'Herramientas para leer, validar, editar, exportar, visualizar en tiempo real y sincronizar con codigo '
@@ -92,6 +95,7 @@ def resolver_rutas(args):
 
 def escribir(doc, a, extra=None):
     bk = doc.save(a.get('salida'), backup=True, force=bool(a.get('forzar')))
+    log.info('guardado %s (respaldo: %s)', doc.path, bk)
     v = M.validar(doc, oose=False)
     res = {'guardado_en': doc.path, 'respaldo': bk,
            'validacion': {k: v[k] for k in ('ids', 'n_duplicados', 'n_colgantes', 'n_parent_mismatch')}}
@@ -624,25 +628,37 @@ def _texto_json(out):
     return text if len(text) <= 20000 else json.dumps(out, ensure_ascii=False, separators=(',', ':'))
 
 
+def _resumen_args(args, limite=500):
+    texto = json.dumps(args, ensure_ascii=False, default=str)
+    return texto if len(texto) <= limite else texto[:limite] + f'... ({len(texto)} caracteres)'
+
+
 def llamar_herramienta(p):
     """Resultado MCP de tools/call. None si la herramienta no existe (lo reporta handle como error JSON-RPC)."""
     t = next((t for t in TOOLS if t['name'] == p.get('name')), None)
     if t is None:
+        log.warning('herramienta desconocida: %s', p.get('name'))
         return None
     args = p.get('arguments') or {}
+    if log.isEnabledFor(logging.DEBUG):
+        log.debug('%s %s', t['name'], _resumen_args(args))
     problema = revisar_args(t['inputSchema'], args)
     if problema:
+        log.info('%s: argumentos invalidos: %s', t['name'], problema)
         return {'content': [{'type': 'text', 'text': f'Error: {problema}'}], 'isError': True}
+    inicio = time.monotonic()
     try:
         out = t['fn'](resolver_rutas(args))
+        log.info('%s: ok en %.2f s', t['name'], time.monotonic() - inicio)
         if isinstance(out, dict) and '__content__' in out:
             return {'content': out['__content__'], 'isError': False}
         text = out if isinstance(out, str) else _texto_json(out)
         return {'content': [{'type': 'text', 'text': text}], 'isError': False}
     except M.MdjError as e:
+        log.info('%s: %s', t['name'], e)
         return {'content': [{'type': 'text', 'text': f'Error: {e}'}], 'isError': True}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
+        log.exception('%s: error inesperado con %s', t['name'], _resumen_args(args))
         return {'content': [{'type': 'text', 'text': f'Error inesperado: {type(e).__name__}: {e}'}], 'isError': True}
 
 
@@ -686,12 +702,26 @@ def handle(msg):
             return None if notificacion else _error(mid, -32601, f'Metodo no soportado: {method}')
         return None if notificacion else {'jsonrpc': '2.0', 'id': mid, 'result': result}
     except Exception as e:
-        traceback.print_exc(file=sys.stderr)
+        log.exception('error interno en %s', method)
         return None if notificacion else _error(mid, -32603, str(e))
 
 
 def _constante_no_json(c):
     raise ValueError(f'{c} no es JSON valido')
+
+
+def configurar_log():
+    """Bitacora solo por stderr (stdout es el canal JSON-RPC). Nivel en STARUML_MCP_LOG_LEVEL; WARNING por omision."""
+    pedido = os.environ.get('STARUML_MCP_LOG_LEVEL', '').strip().upper()
+    nivel = pedido if pedido in NIVELES_LOG else 'WARNING'
+    manejador = logging.StreamHandler(sys.stderr)
+    manejador.setFormatter(logging.Formatter('%(asctime)s staruml-mcp %(levelname)s %(message)s'))
+    log.handlers[:] = [manejador]
+    log.setLevel(nivel)
+    log.propagate = False
+    if pedido and pedido != nivel:
+        log.warning('STARUML_MCP_LOG_LEVEL=%r no es un nivel valido (%s); se usa WARNING', pedido, ', '.join(NIVELES_LOG))
+    log.info('staruml-mcp %s con Python %s', VERSION, sys.version.split()[0])
 
 
 def main():
@@ -700,6 +730,9 @@ def main():
     if hasattr(sys.stdin, 'reconfigure'):  # no existe si stdin fue reemplazado (p. ej. en pruebas)
         sys.stdin.reconfigure(encoding='utf-8')
         sys.stdout.reconfigure(encoding='utf-8', newline='\n')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace')
+    configurar_log()
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -708,6 +741,7 @@ def main():
             # NaN e Infinity no son JSON: si pasaran, terminarian escritos en el .mdj y StarUML ya no lo abriria
             msg = json.loads(line, parse_constant=_constante_no_json)
         except ValueError:
+            log.warning('linea que no es JSON: %s', line[:200])
             send({'jsonrpc': '2.0', 'id': None, 'error': {'code': -32700, 'message': 'JSON invalido'}})
             continue
         if isinstance(msg, list):  # lote JSON-RPC: una sola respuesta con el arreglo de respuestas
