@@ -12,6 +12,7 @@ import staruml_compare as C
 import staruml_mdj as M
 from staruml_mdj import MdjError, ref
 
+LIMITE_UN_DIAGRAMA = 60  # mas clases que esto (en varios paquetes): un diagrama por paquete si no se pide otra cosa
 SIMBOLO = {'public': '+', 'private': '-', 'protected': '#', 'package': '~', 'internal': '~'}
 _DIRS_PRUEBAS = {'test', 'tests', '__tests__', 'androidTest', 'testFixtures'}
 # PedidoTest.java, PedidoIT.java, test_pedido.py, pedido.spec.ts... (una clase llamada solo Test si entra)
@@ -291,10 +292,15 @@ def textos(doc, el):
     return attrs, ops, lits
 
 
-def medir(doc, el, op):
-    """(ancho, alto) de la caja: generosos, porque StarUML agranda una caja chica pero no achica una grande."""
-    attrs, ops, lits = textos(doc, el)
+def medir(doc, el, op, espacio=None):
+    """(ancho, alto) de la caja: generosos, porque StarUML agranda una caja chica pero no achica una grande.
+    Con espacio (el paquete de una clase de otro paquete, que se dibuja como contexto) la caja es compacta: solo el
+    nombre y "(from paquete)"."""
     estereotipo = {'UMLInterface': '«interface»', 'UMLEnumeration': '«enumeration»'}.get(el['_type'])
+    if espacio is not None:
+        ancho = max(M.ancho13(el.get('name', '')) * 1.12, M.ancho13(f'(from {espacio})'), M.ancho13(estereotipo or '')) + 26
+        return max(110, round(ancho)), 27 + 15 + (15 if estereotipo else 0)
+    attrs, ops, lits = textos(doc, el)
     lineas = attrs + ops + lits + ([estereotipo] if estereotipo else [])
     ancho = max([M.ancho13(el.get('name', '')) * 1.12] + [M.ancho13(t) for t in lineas]) + 26
     alto = 27 + (15 if estereotipo else 0)
@@ -315,13 +321,22 @@ def _compartimentos(el, attrs, ops, lits, op):
     return out
 
 
-def vista_clasificador(doc, dg, el, x, y, ancho, alto, op):
-    """Vista de clase, interfaz o enumeracion en notacion de etiqueta, con todos sus compartimentos."""
-    attrs, ops, lits = textos(doc, el)
+def vista_clasificador(doc, dg, el, x, y, ancho, alto, op, espacio=None):
+    """Vista de clase, interfaz o enumeracion en notacion de etiqueta, con todos sus compartimentos. Con espacio es
+    la caja compacta de una clase de otro paquete: sin miembros y con "(from paquete)"."""
+    compacta = espacio is not None
+    attrs, ops, lits = ([], [], []) if compacta else textos(doc, el)
     vid, ncid = doc.new_id(), doc.new_id()
     labs = [doc.new_id() for _ in range(4)]
     estereotipo = {'UMLInterface': '«interface»', 'UMLEnumeration': '«enumeration»'}.get(el['_type'])
-    alto_nombre = 27 + (15 if estereotipo else 0)
+    alto_nombre = 27 + (15 if estereotipo else 0) + (15 if compacta else 0)
+    top_nombre = y + 7 + (15 if estereotipo else 0)
+    ns = {'_type': 'LabelView', '_id': labs[2], '_parent': ref(ncid), 'font': 'Arial;13;0', 'parentStyle': True,
+          'left': x + 5, 'top': top_nombre + 15, 'width': ancho - 9, 'height': 13}
+    if compacta:
+        ns['text'] = f'(from {espacio})'
+    else:
+        ns['visible'] = False
     et = {'_type': 'LabelView', '_id': labs[0], '_parent': ref(ncid), 'font': 'Arial;13;0', 'parentStyle': True,
           'left': x + 5, 'top': y + 5, 'width': ancho - 9, 'height': 13}
     if estereotipo:
@@ -331,10 +346,9 @@ def vista_clasificador(doc, dg, el, x, y, ancho, alto, op):
     nc = {'_type': 'UMLNameCompartmentView', '_id': ncid, '_parent': ref(vid), 'model': ref(el['_id']),
           'subViews': [et,
                        {'_type': 'LabelView', '_id': labs[1], '_parent': ref(ncid), 'font': 'Arial;13;3' if el.get('isAbstract') else 'Arial;13;1',
-                        'parentStyle': True, 'left': x + 5, 'top': y + alto_nombre - 20, 'width': ancho - 9, 'height': 13,
+                        'parentStyle': True, 'left': x + 5, 'top': top_nombre, 'width': ancho - 9, 'height': 13,
                         'text': el.get('name', '')},
-                       {'_type': 'LabelView', '_id': labs[2], '_parent': ref(ncid), 'visible': False, 'font': 'Arial;13;0',
-                        'parentStyle': True, 'left': x, 'top': y, 'height': 13},
+                       ns,
                        {'_type': 'LabelView', '_id': labs[3], '_parent': ref(ncid), 'visible': False, 'font': 'Arial;13;0',
                         'parentStyle': True, 'left': x, 'top': y, 'height': 13, 'horizontalAlignment': 1}],
           'font': 'Arial;13;0', 'parentStyle': True, 'left': x, 'top': y, 'width': ancho, 'height': alto_nombre,
@@ -355,8 +369,10 @@ def vista_clasificador(doc, dg, el, x, y, ancho, alto, op):
         return c
 
     subs, top, campos = [nc], y + alto_nombre, {}
+    visibles = [(items, False) for items, _ in _compartimentos(el, attrs, ops, lits, op)] if compacta else \
+        _compartimentos(el, attrs, ops, lits, op)
     for (items, visible), (clave, tipo, tipo_item, modelos) in zip(
-            _compartimentos(el, attrs, ops, lits, op),
+            visibles,
             ([('enumerationLiteralCompartment', 'UMLEnumerationLiteralCompartmentView', 'UMLEnumerationLiteralView', el.get('literals', []))]
              if el['_type'] == 'UMLEnumeration' else []) +
             [('attributeCompartment', 'UMLAttributeCompartmentView', 'UMLAttributeView', el.get('attributes', [])),
@@ -374,6 +390,8 @@ def vista_clasificador(doc, dg, el, x, y, ancho, alto, op):
     v = {'_type': VISTA_DE[el['_type']], '_id': vid, '_parent': ref(dg['_id']), 'model': ref(el['_id']), 'subViews': subs,
          'font': 'Arial;13;0', 'parentStyle': False, 'containerChangeable': True,
          'left': x, 'top': y, 'width': ancho, 'height': alto, 'stereotypeDisplay': 'label', 'nameCompartment': ref(ncid)}
+    if compacta:
+        v['showNamespace'] = True
     if campos['attributeCompartment'].get('visible', True) is False:
         v['suppressAttributes'] = True
     if campos['operationCompartment'].get('visible', True) is False:
@@ -746,17 +764,21 @@ def rutas(cajas, geometrias):
 # Diagramas
 # ---------------------------------------------------------------------------
 
-def dibujar(doc, dg, elementos, relaciones, op):
-    """Vistas de los elementos y de las relaciones entre ellos. Devuelve el resumen del diagrama."""
+def dibujar(doc, dg, elementos, relaciones, op, contexto=None):
+    """Vistas de los elementos y de las relaciones entre ellos. contexto: {id: paquete} de clases de otros paquetes
+    que se dibujan compactas, con sus relaciones hacia los elementos. Devuelve el resumen del diagrama."""
+    contexto = contexto or {}
+    principales = {el['_id'] for el in elementos}
+    elementos = list(elementos) + [doc.ids[i] for i in sorted(contexto, key=lambda i: doc.name_of(i))]
     ids = {el['_id'] for el in elementos}
-    tam = {el['_id']: medir(doc, el, op) for el in elementos}
+    tam = {el['_id']: medir(doc, el, op, contexto.get(el['_id'])) for el in elementos}
     rels, aristas = [], []
     for rel, _, _ in relaciones:
         if rel['_type'] == 'UMLAssociation':
             o, d = rel['end1']['reference']['$ref'], rel['end2']['reference']['$ref']
         else:
             o, d = rel['source']['$ref'], rel['target']['$ref']
-        if o not in ids or d not in ids:
+        if o not in ids or d not in ids or (o not in principales and d not in principales):
             continue
         rels.append((rel, o, d))
         if o != d:
@@ -766,7 +788,7 @@ def dibujar(doc, dg, elementos, relaciones, op):
     vistas = {}
     for el in elementos:
         x, y = posiciones[el['_id']]
-        vistas[el['_id']] = vista_clasificador(doc, dg, el, x, y, *tam[el['_id']], op)
+        vistas[el['_id']] = vista_clasificador(doc, dg, el, x, y, *tam[el['_id']], op, contexto.get(el['_id']))
     cajas = {n: _caja(v) for n, v in vistas.items()}
     medios_de = rutas(cajas, geometrias)
     sentido = {frozenset(par): par for geo in geometrias for par in list(geo['cadenas']) + geo['mismas']}
@@ -799,17 +821,19 @@ def dibujar(doc, dg, elementos, relaciones, op):
         if o != d and _cruces(_puntos(v), otras):
             cruzan.append(f'{doc.name_of(o)} - {doc.name_of(d)} ({rel["_type"]})')
     return {'diagrama': dg.get('name'), 'id': dg['_id'], 'cajas': len(vistas), 'lineas': len(rels),
+            'clases_de_otros_paquetes': sorted(doc.name_of(i) for i in contexto),
             'lineas_que_cruzan_cajas': cruzan,
             'ancho': max((c[2] for c in cajas.values()), default=0) + MARGEN,
             'alto': max((c[3] for c in cajas.values()), default=0) + MARGEN}
 
 
-def programa_a_diagrama(doc, ruta_codigo, lenguaje='java', paquete=None, diagrama=None, diagrama_por='programa',
+def programa_a_diagrama(doc, ruta_codigo, lenguaje='java', paquete=None, diagrama=None, diagrama_por=None,
                         atributos=True, metodos=True, solo_publicos=False, omitir_accesores=False, asociaciones=True,
                         dependencias=False, incluir_pruebas=False, reemplazar=False, por_defecto=False):
-    """Lee el programa, crea su modelo en un paquete nuevo y dibuja su diagrama de clases (uno para todo el programa o
-    uno por paquete)."""
-    if diagrama_por not in ('programa', 'paquete'):
+    """Lee el programa, crea su modelo en un paquete nuevo y dibuja su diagrama de clases: uno para todo el programa o
+    uno por paquete (cada uno con las clases de otros paquetes con las que se relaciona). Sin diagrama_por se elige
+    solo: por paquete si el programa tiene mas de LIMITE_UN_DIAGRAMA clases repartidas en varios paquetes."""
+    if diagrama_por not in (None, 'programa', 'paquete'):
         raise MdjError('diagrama_por debe ser "programa" o "paquete"')
     clases, repetidas = leer_programa(ruta_codigo, lenguaje, incluir_pruebas)
     if not clases:
@@ -829,19 +853,33 @@ def programa_a_diagrama(doc, ruta_codigo, lenguaje='java', paquete=None, diagram
           'asociaciones': asociaciones, 'dependencias': dependencias}
     hecho = construir(doc, clases, raiz_nombre, op)
     elems, relaciones = hecho['elementos'], hecho['relaciones']
+    paquete_de = {el['_id']: clases[q].get('paquete') or '' for q, el in elems.items()}
+    automatico = diagrama_por is None
+    if automatico:
+        diagrama_por = 'paquete' if len(elems) > LIMITE_UN_DIAGRAMA and len(set(paquete_de.values())) > 1 else 'programa'
     grupos = []
     if diagrama_por == 'programa':
-        grupos.append((diagrama or 'Diagrama de clases', hecho['raiz'], list(elems.values())))
+        grupos.append((diagrama or 'Diagrama de clases', hecho['raiz'], list(elems.values()), {}))
     else:
         por_pk = {}
-        for q, el in elems.items():
-            por_pk.setdefault(clases[q].get('paquete') or '', []).append(el)
+        for el in elems.values():
+            por_pk.setdefault(paquete_de[el['_id']], []).append(el)
         for pk_nombre in sorted(por_pk):
-            grupos.append((pk_nombre or raiz_nombre, hecho['paquetes'][pk_nombre], por_pk[pk_nombre]))
+            propios = {el['_id'] for el in por_pk[pk_nombre]}
+            contexto = {}
+            for rel, _, _ in relaciones:  # clases de otros paquetes relacionadas directamente
+                if rel['_type'] == 'UMLAssociation':
+                    o, d = rel['end1']['reference']['$ref'], rel['end2']['reference']['$ref']
+                else:
+                    o, d = rel['source']['$ref'], rel['target']['$ref']
+                for a, b in ((o, d), (d, o)):
+                    if a in propios and b not in propios:
+                        contexto[b] = paquete_de[b] or raiz_nombre
+            grupos.append((pk_nombre or raiz_nombre, hecho['paquetes'][pk_nombre], por_pk[pk_nombre], contexto))
     diagramas = []
-    for i, (nombre, dueno, elementos) in enumerate(grupos):
+    for i, (nombre, dueno, elementos, contexto) in enumerate(grupos):
         dg = M.crear_diagrama(doc, 'clases', nombre, dentro_de=dueno['_id'], por_defecto=por_defecto and i == 0)
-        diagramas.append(dibujar(doc, dg, sorted(elementos, key=lambda e: e.get('name', '')), relaciones, op))
+        diagramas.append(dibujar(doc, dg, sorted(elementos, key=lambda e: e.get('name', '')), relaciones, op, contexto))
     doc.reindex()
     cuenta = {}
     for el in elems.values():
@@ -849,7 +887,10 @@ def programa_a_diagrama(doc, ruta_codigo, lenguaje='java', paquete=None, diagram
     rels = {}
     for rel, _, _ in relaciones:
         rels[rel['_type']] = rels.get(rel['_type'], 0) + 1
-    return {'paquete': raiz_nombre, 'lenguaje': lenguaje, 'diagramas': diagramas,
+    return {'paquete': raiz_nombre, 'lenguaje': lenguaje, 'diagrama_por': diagrama_por,
+            **({'nota': f'El programa tiene {len(elems)} clases en varios paquetes: se hizo un diagrama por paquete '
+                        f'(con diagrama_por="programa" queda uno solo).'} if automatico and diagrama_por == 'paquete' else {}),
+            'diagramas': diagramas,
             'clases': cuenta.get('UMLClass', 0), 'interfaces': cuenta.get('UMLInterface', 0),
             'enumeraciones': cuenta.get('UMLEnumeration', 0),
             'paquetes_del_programa': sorted(k for k in hecho['paquetes'] if k),

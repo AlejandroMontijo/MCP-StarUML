@@ -316,8 +316,9 @@ def t_codigo_a_diagrama(a):
            'paquete': S(description='Nombre del paquete del modelo donde se crea todo (default: nombre de la carpeta)'),
            'diagrama': S(description='Nombre del diagrama (default "Diagrama de clases")'),
            'diagrama_por': S(enum=['programa', 'paquete'],
-                             description='programa (default): un diagrama con todo; paquete: uno por paquete del programa, '
-                                         'recomendado para programas grandes'),
+                             description='programa: un diagrama con todo; paquete: uno por paquete del programa, cada uno con '
+                                         'las clases de otros paquetes con que se relaciona. Si se omite: por paquete cuando '
+                                         'hay mas de 60 clases en varios paquetes, si no uno solo'),
            'atributos': B(description='Mostrar atributos (default true)'),
            'metodos': B(description='Mostrar metodos (default true)'),
            'solo_publicos': B(description='Solo atributos y metodos publicos (default false)'),
@@ -350,7 +351,7 @@ def t_programa_a_diagrama(a):
                                                   'reemplazar') if k in a})
         info = P.programa_a_diagrama(doc, a['ruta_codigo'], por_defecto=nuevo, **opciones)
         info['archivo_nuevo'] = nuevo
-        if sum(d['cajas'] for d in info['diagramas']) > 60 and (a.get('diagrama_por') or 'programa') == 'programa':
+        if info['diagrama_por'] == 'programa' and info['diagramas'][0]['cajas'] > P.LIMITE_UN_DIAGRAMA:
             info['aviso'] = 'El programa es grande para un solo diagrama; con diagrama_por="paquete" queda uno por paquete.'
         return escribir(doc, dict(a, salida=a.get('salida') or archivo) if nuevo else a, info)
     finally:

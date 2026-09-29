@@ -136,6 +136,9 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
     referida (mientras no alargue el diagrama de más); filas de hasta 7 cajas; cada línea
     que salta filas pasa por un hueco reservado y corre por el canal libre entre filas, así
     que ninguna cruza una caja. El resultado reporta `lineas_que_cruzan_cajas` (vacío).
+  - Un diagrama para todo el programa o uno por paquete; sin indicarlo, por paquete cuando hay más de
+    60 clases en varios paquetes. En cada diagrama por paquete, las clases de otros paquetes que se
+    relacionan con las suyas aparecen compactas (solo nombre y "(from paquete)") con esas relaciones.
   - El diagrama coincide al 100 % con el programa en `staruml_comparar_codigo`.
 - `staruml_codigo_a_diagrama`: extrae clases desde código existente y las incorpora al
   paquete del `.mdj` con su correspondiente vista.

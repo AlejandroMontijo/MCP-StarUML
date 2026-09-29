@@ -93,7 +93,7 @@ Las rutas relativas de `salida`, `carpeta`, `carpeta_salida` y `ruta_codigo` se 
 |---|---|
 | `staruml_comparar_codigo` | Compara un diagrama (Clases o Secuencia) contra código fuente (Java, Python, TS/JS, C#, Kotlin, Go). Devuelve métrica de sincronización (%) y elementos faltantes. |
 | `staruml_diagrama_a_codigo` | Genera esqueletos de código limpios y tipados (Java, Python, TypeScript, C#) a partir de las clases y relaciones de un diagrama. No reemplaza archivos existentes salvo con `sobrescribir: true`. |
-| `staruml_programa_a_diagrama` | Dibuja el diagrama de clases de un programa ya hecho (Java por defecto; también Python, TS/JS, C#, Kotlin y Go): paquetes del programa, clases, interfaces y enumeraciones con atributos y métodos (visibilidad, `static`, `abstract`), herencia, `implements` y asociaciones desde los campos (rol, multiplicidad y navegabilidad en ambos sentidos). Acomodo por niveles sin encimar cajas ni cruzar líneas; un diagrama para todo el programa o uno por paquete; crea el `.mdj` si no existe. |
+| `staruml_programa_a_diagrama` | Dibuja el diagrama de clases de un programa ya hecho (Java por defecto; también Python, TS/JS, C#, Kotlin y Go): paquetes del programa, clases, interfaces y enumeraciones con atributos y métodos (visibilidad, `static`, `abstract`), herencia, `implements` y asociaciones desde los campos (rol, multiplicidad y navegabilidad en ambos sentidos). Acomodo por niveles sin encimar cajas ni cruzar líneas; un diagrama para todo el programa o uno por paquete (cada uno con las clases de otros paquetes con que se relaciona, compactas); con más de 60 clases en varios paquetes elige por paquete solo; crea el `.mdj` si no existe. |
 | `staruml_codigo_a_diagrama` | Importa clases, interfaces, enumeraciones, atributos y métodos desde código fuente (los mismos lenguajes que la comparación) hacia el modelo y diagrama `.mdj`. Por defecto solo agrega; con `modo: "sincronizar"` deja exactamente los atributos del código y reporta los quitados. |
 
 ### Lectura, Consulta y Diagnóstico
@@ -175,7 +175,7 @@ Para prevenir corrupción accidental de archivos:
   "omitir_accesores": true
 }
 ```
-Crea (o completa) el `.mdj` con un paquete del mismo nombre que la carpeta del programa, sus paquetes Java anidados y el diagrama "Diagrama de clases". Los campos cuyo tipo es otra clase del programa se dibujan como asociaciones (colecciones con `0..*`); las constantes `static` quedan como atributos. Las carpetas y clases de pruebas se omiten salvo con `incluir_pruebas`. Para programas grandes conviene `"diagrama_por": "paquete"`; para rehacerlo después de cambiar el código, `"reemplazar": true`.
+Crea (o completa) el `.mdj` con un paquete del mismo nombre que la carpeta del programa, sus paquetes Java anidados y el diagrama "Diagrama de clases". Los campos cuyo tipo es otra clase del programa se dibujan como asociaciones (colecciones con `0..*`); las constantes `static` quedan como atributos. Las carpetas y clases de pruebas se omiten salvo con `incluir_pruebas`. Si el programa tiene más de 60 clases repartidas en varios paquetes, hace un diagrama por paquete; en cada uno, las clases de otros paquetes con las que se relaciona aparecen compactas, con "(from paquete)". `"diagrama_por"` fuerza uno u otro modo; para rehacerlo después de cambiar el código, `"reemplazar": true`.
 
 ### 4. Generar Esqueletos de Código desde el Modelo
 ```json

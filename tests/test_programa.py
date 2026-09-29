@@ -167,8 +167,15 @@ def test_un_diagrama_por_paquete(programa, tmp_path):
     doc = M.Doc(mdj)
     servicio = doc.diagram('com.tienda.servicio')
     assert doc.name_of(doc.parent[servicio['_id']]) == 'servicio'
-    assert sorted(doc.name_of(v['model']['$ref']) for v in vistas_de_cajas(servicio)) == ['RepositorioPedidos', 'ServicioPedidos']
-    assert len([v for v in servicio['ownedViews'] if v['_type'] == 'UMLAssociationView']) == 1  # la de otro paquete no se dibuja
+    # las clases del paquete completas, y las de otros paquetes con que se relacionan, compactas y con su paquete
+    assert sorted(doc.name_of(v['model']['$ref']) for v in vistas_de_cajas(servicio)) == ['Pedido', 'RepositorioPedidos', 'ServicioPedidos']
+    assert r['diagramas'][1]['clases_de_otros_paquetes'] == ['Pedido']
+    pedido = next(v for v in vistas_de_cajas(servicio) if doc.name_of(v['model']['$ref']) == 'Pedido')
+    assert pedido.get('showNamespace') and pedido.get('suppressAttributes') and pedido.get('suppressOperations')
+    etiquetas = [l.get('text') for l in pedido['subViews'][0]['subViews'] if l.get('visible') is not False]
+    assert '(from com.tienda.modelo)' in etiquetas
+    assert len([v for v in servicio['ownedViews'] if v['_type'] == 'UMLAssociationView']) == 2  # tambien la de Pedido
+    assert r['diagramas'][0]['clases_de_otros_paquetes'] == ['ServicioPedidos']
     for d in doc.diagrams():
         geometria_limpia(doc, d)
 
@@ -271,3 +278,23 @@ def test_clases_de_diseno_con_metodos_no_son_problema_oose(programa, modelo, tmp
     doc.reindex()
     doc.save(backup=False)
     assert any('Cuenta (entity) tiene metodos' in p for p in ok(tool('mdj_validar', archivo=modelo))['oose']['problemas'])
+
+
+def test_programa_grande_se_divide_por_paquete_solo(tmp_path):
+    archivos = {}
+    for pk, otro in (('ventas', 'almacen'), ('almacen', 'ventas')):
+        for i in range(32):
+            campo = f'    private app.{otro}.{otro.capitalize()}{i:02d} socio;\n' if i % 8 == 0 else ''
+            archivos[f'app/{pk}/{pk.capitalize()}{i:02d}.java'] = (
+                f'package app.{pk};\npublic class {pk.capitalize()}{i:02d} {{\n{campo}    private int dato;\n}}\n')
+    codigo = fuentes(str(tmp_path / 'grande'), archivos)
+    r = ok(tool('staruml_programa_a_diagrama', archivo=str(tmp_path / 'g.mdj'), ruta_codigo=codigo))
+    assert r['diagrama_por'] == 'paquete' and 'nota' in r and 'aviso' not in r
+    assert [d['diagrama'] for d in r['diagramas']] == ['app.almacen', 'app.ventas']
+    assert all(len(d['clases_de_otros_paquetes']) == 4 for d in r['diagramas'])
+    doc = M.Doc(str(tmp_path / 'g.mdj'))
+    for d in doc.diagrams():
+        geometria_limpia(doc, d)
+    r = ok(tool('staruml_programa_a_diagrama', archivo=str(tmp_path / 'g.mdj'), ruta_codigo=codigo, diagrama_por='programa',
+               reemplazar=True))
+    assert r['diagrama_por'] == 'programa' and len(r['diagramas']) == 1 and 'aviso' in r
