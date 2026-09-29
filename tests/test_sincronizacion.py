@@ -17,12 +17,12 @@ def compilar(lenguaje, carpeta):
     if lenguaje == 'java':
         if not shutil.which('javac'):
             pytest.skip('sin javac')
-        r = subprocess.run(['javac', '-d', os.path.join(carpeta, 'bin')] + archivos, capture_output=True, text=True)
+        r = subprocess.run([shutil.which('javac'), '-d', os.path.join(carpeta, 'bin')] + archivos, capture_output=True, text=True)
         return r.returncode == 0, r.stderr[-800:]
     if lenguaje == 'typescript':
         if not shutil.which('tsc'):
             pytest.skip('sin tsc')
-        r = subprocess.run(['tsc', '--noEmit', '--strict', '--target', 'es2020'] + archivos, capture_output=True, text=True)
+        r = subprocess.run([shutil.which('tsc'), '--noEmit', '--strict', '--target', 'es2020'] + archivos, capture_output=True, text=True)
         return r.returncode == 0, r.stdout[-800:]
     malos = [(f, r.stderr[-300:]) for f in archivos
              for r in [subprocess.run([sys.executable, f], capture_output=True, text=True, cwd=carpeta)] if r.returncode]

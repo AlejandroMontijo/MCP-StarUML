@@ -111,10 +111,10 @@ def test_codigo_generado_del_diagrama_de_clases_compila_y_vuelve_al_100(real, tm
     assert r['escritos'] and not r['omitidos_por_nombre_invalido']
     archivos = sorted(glob.glob(os.path.join(out, '*.*')))
     if lenguaje == 'java' and shutil.which('javac'):
-        cp = subprocess.run(['javac', '-d', os.path.join(out, 'bin')] + archivos, capture_output=True, text=True)
+        cp = subprocess.run([shutil.which('javac'), '-d', os.path.join(out, 'bin')] + archivos, capture_output=True, text=True)
         assert cp.returncode == 0, cp.stderr[-1500:]
     elif lenguaje == 'typescript' and shutil.which('tsc'):
-        cp = subprocess.run(['tsc', '--noEmit', '--strict', '--target', 'es2020'] + archivos, capture_output=True, text=True)
+        cp = subprocess.run([shutil.which('tsc'), '--noEmit', '--strict', '--target', 'es2020'] + archivos, capture_output=True, text=True)
         assert cp.returncode == 0, cp.stdout[-1500:]
     elif lenguaje == 'python':
         for f in archivos:
