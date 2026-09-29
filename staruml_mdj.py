@@ -504,6 +504,7 @@ def validar(doc, oose=True):
            'n_colgantes': len(colg), 'parent_mismatch': [m for _, m in mism[:20]], 'n_parent_mismatch': len(mism)}
     if oose:
         res['oose'] = reglas_oose(doc)
+        res['comportamiento'] = reglas_comportamiento(doc)
     return res
 
 
@@ -672,6 +673,14 @@ def reglas_oose(doc):
             ks, kt = kinds.get(s, '?'), kinds.get(t, '?')
             rep = m.get('messageSort') == 'reply'
             tag = f'{dg.get("name")} #{n} {m.get("name")} ({ks}->{kt})'
+            if m['source']['$ref'] == m['target']['$ref']:  # auto-mensaje: procesamiento interno de un objeto
+                if ks == 'actor':
+                    prob.append(f'Auto-mensaje en un actor (queda fuera del sistema): {tag}')
+                elif ks == 'boundary':
+                    avisos.append(f'Auto-mensaje en una boundary; la logica va en el control: {tag}')
+                elif rep:
+                    prob.append(f'Reply de una lifeline a si misma: {tag}')
+                continue
             ok = {('actor', 'boundary'), ('boundary', 'control'), ('control', 'entity'), ('entity', 'control'),
                   ('control', 'boundary'), ('boundary', 'actor'), ('entity', 'entity')}
             if (ks, kt) not in ok:
@@ -710,6 +719,304 @@ def reglas_oose(doc):
                 fuera += 1
         if fuera:
             avisos.append(f'{dg.get("name")}: {fuera} llamadas salen de una lifeline sin activacion')
+    return {'problemas': prob, 'avisos': avisos}
+
+
+# ---------------------------------------------------------------------------
+# Diagramas de estados y de actividades
+# ---------------------------------------------------------------------------
+
+COMPORTAMIENTOS = ('UMLStateMachine', 'UMLActivity')
+_NO_BAJAR = COMPORTAMIENTOS + ('UMLOpaqueBehavior', 'UMLInteraction', 'UMLCollaboration')
+NODOS_ACTIVIDAD = {'UMLInitialNode': 'inicial', 'UMLActivityFinalNode': 'final', 'UMLFlowFinalNode': 'fin_de_flujo',
+                   'UMLDecisionNode': 'decision', 'UMLMergeNode': 'fusion', 'UMLForkNode': 'bifurcacion',
+                   'UMLJoinNode': 'union', 'UMLAction': 'accion', 'UMLObjectNode': 'objeto',
+                   'UMLCentralBufferNode': 'objeto', 'UMLDataStoreNode': 'objeto'}
+PINES = ('UMLPin', 'UMLInputPin', 'UMLOutputPin', 'UMLValuePin', 'UMLActionInputPin', 'UMLExpansionNode')
+
+
+def _internos(raiz):
+    """Elementos que cuelgan de un comportamiento sin entrar en otros comportamientos anidados (p. ej. la actividad
+    'do' de un estado) ni en sus diagramas."""
+    pila = [v for k, v in raiz.items() if k not in ('_parent', 'ownedViews')][::-1]
+    while pila:  # en profundidad y en el orden del archivo
+        o = pila.pop()
+        if isinstance(o, list):
+            pila.extend(o[::-1])
+        elif isinstance(o, dict):
+            if '_id' in o:
+                if o['_type'] in _NO_BAJAR or o['_type'].endswith('Diagram'):
+                    continue
+                yield o
+            pila.extend([v for k, v in o.items() if k != '_parent'][::-1])
+
+
+def _dueno_comportamiento(doc, dg):
+    i = dg['_id']
+    while i in doc.parent:
+        i = doc.parent[i]
+        if doc.ids[i]['_type'] in COMPORTAMIENTOS:
+            return doc.ids[i]
+    raise MdjError(f'El diagrama {dg.get("name")} no pertenece a una maquina de estados ni a una actividad')
+
+
+def _etiqueta(o):
+    if o.get('name'):
+        return o['name']
+    if o['_type'] == 'UMLPseudostate':
+        return f'({o.get("kind", "initial")})'
+    if o['_type'] == 'UMLFinalState':
+        return '(final)'
+    return f'({NODOS_ACTIVIDAD.get(o["_type"], o["_type"])})'
+
+
+def _nombres(lista):
+    return [x.get('name') or x.get('body') or x['_type'] for x in (lista or []) if isinstance(x, dict)]
+
+
+def _maquina(doc, sm):
+    vert, trans, regiones = {}, [], {}
+    for o in _internos(sm):
+        if o['_type'] in ('UMLPseudostate', 'UMLState', 'UMLFinalState', 'UMLConnectionPointReference'):
+            vert[o['_id']] = o
+            regiones.setdefault(doc.parent.get(o['_id']), []).append(o['_id'])
+        elif o['_type'] == 'UMLTransition':
+            trans.append(o)
+
+    def ancestros(i):  # estados compuestos que contienen al vertice, del mas cercano al mas lejano
+        out, j = [], doc.parent.get(i)
+        while j and j != sm['_id']:
+            if j in vert:
+                out.append(j)
+            j = doc.parent.get(j)
+        return out
+    return vert, trans, regiones, ancestros
+
+
+def _actividad(doc, act):
+    nodos, flujos, particion = {}, [], {}
+    duenio_pin = {}
+    for o in _internos(act):
+        if o['_type'] in NODOS_ACTIVIDAD or (o['_type'].endswith(('Action', 'Node')) and o['_type'] not in PINES):
+            nodos[o['_id']] = o
+        elif o['_type'] in PINES:
+            duenio_pin[o['_id']] = doc.parent.get(o['_id'])
+        elif o['_type'] in ('UMLControlFlow', 'UMLObjectFlow'):
+            flujos.append(o)
+    for o in _internos(act):
+        if o['_type'] == 'UMLActivityPartition':
+            for r in o.get('nodes', []) or []:
+                if isinstance(r, dict) and r.get('$ref') in nodos:
+                    particion[r['$ref']] = o.get('name')
+    for i in nodos:  # nodos guardados dentro de la particion
+        j = doc.parent.get(i)
+        while j and j != act['_id'] and i not in particion:
+            if doc.ids[j]['_type'] == 'UMLActivityPartition':
+                particion[i] = doc.ids[j].get('name')
+            j = doc.parent.get(j)
+
+    def extremo(f, k):
+        r = (f.get(k) or {}).get('$ref')
+        return duenio_pin.get(r, r)
+    return nodos, flujos, particion, extremo
+
+
+def comportamiento(doc, diagrama):
+    """Estados y transiciones de un diagrama de estados, o nodos y flujos de un diagrama de actividades (de la
+    maquina de estados o actividad a la que pertenece el diagrama)."""
+    dg = doc.diagram(diagrama)
+    b = _dueno_comportamiento(doc, dg)
+    en_diagrama = {v.get('model', {}).get('$ref') for v in _ids_y_refs_vistas(dg)}
+    if b['_type'] == 'UMLStateMachine':
+        vert, trans, _, ancestros = _maquina(doc, b)
+        estados = []
+        for i, v in vert.items():
+            e = {'id': i, 'nombre': _etiqueta(v), 'tipo': {'UMLState': 'estado', 'UMLFinalState': 'final'}.get(v['_type'], v.get('kind', 'initial')),
+                 'dentro_de': _etiqueta(vert[ancestros(i)[0]]) if ancestros(i) else None, 'en_diagrama': i in en_diagrama}
+            for k, nom in (('entryActivities', 'entrada'), ('doActivities', 'hacer'), ('exitActivities', 'salida')):
+                if v.get(k):
+                    e[nom] = _nombres(v[k])
+            estados.append(e)
+        transiciones = [{'id': t['_id'], 'de': _etiqueta(vert[t['source']['$ref']]) if t.get('source', {}).get('$ref') in vert else None,
+                         'a': _etiqueta(vert[t['target']['$ref']]) if t.get('target', {}).get('$ref') in vert else None,
+                         'disparadores': _nombres(t.get('triggers')), 'guarda': t.get('guard') or '',
+                         'efectos': _nombres(t.get('effects'))} for t in trans]
+        return {'diagrama': dg.get('name'), 'tipo': 'maquina_de_estados', 'nombre': b.get('name'), 'estados': estados,
+                'transiciones': transiciones}
+    nodos, flujos, particion, extremo = _actividad(doc, b)
+    return {'diagrama': dg.get('name'), 'tipo': 'actividad', 'nombre': b.get('name'),
+            'nodos': [{'id': i, 'nombre': _etiqueta(n), 'tipo': NODOS_ACTIVIDAD.get(n['_type'], n['_type']),
+                       **({'particion': particion[i]} if i in particion else {}), 'en_diagrama': i in en_diagrama}
+                      for i, n in nodos.items()],
+            'flujos': [{'id': f['_id'], 'de': _etiqueta(nodos[extremo(f, 'source')]) if extremo(f, 'source') in nodos else None,
+                        'a': _etiqueta(nodos[extremo(f, 'target')]) if extremo(f, 'target') in nodos else None,
+                        'guarda': f.get('guard') or '', 'tipo': 'objeto' if f['_type'] == 'UMLObjectFlow' else 'control'}
+                       for f in flujos],
+            'particiones': sorted({p for p in particion.values() if p})}
+
+
+def _ids_y_refs_vistas(dg):
+    pila = list(dg.get('ownedViews', []))
+    while pila:
+        v = pila.pop()
+        yield v
+        pila.extend(v.get('subViews', []) or [])
+
+
+def _alcanzables(inicios, siguientes):
+    vistos, pila = set(), list(inicios)
+    while pila:
+        x = pila.pop()
+        if x not in vistos:
+            vistos.add(x)
+            pila.extend(siguientes(x))
+    return vistos
+
+
+def _reglas_estados(doc, sm, prob, avisos):
+    vert, trans, regiones, ancestros = _maquina(doc, sm)
+    tag = f'Maquina de estados "{sm.get("name")}"'
+    sal, ent = {}, {}
+    for t in trans:
+        s, d = t.get('source', {}).get('$ref'), t.get('target', {}).get('$ref')
+        sal.setdefault(s, []).append(t)
+        ent.setdefault(d, []).append(t)
+    inicial = lambda i: vert[i]['_type'] == 'UMLPseudostate' and vert[i].get('kind', 'initial') == 'initial'
+    iniciales_de = {r: [i for i in ids if inicial(i)] for r, ids in regiones.items()}
+    # la region pertenece a un estado compuesto o a la maquina (los vertices pueden colgar directo de ella)
+    dueno_de = {r: (r if r == sm['_id'] or r in vert else doc.parent.get(r)) for r in regiones}
+    for r, ini in iniciales_de.items():
+        compuesto = dueno_de[r] in vert
+        donde = f'la region de {_etiqueta(vert[dueno_de[r]])}' if compuesto else 'la region principal'
+        if len(ini) > 1:
+            prob.append(f'{tag}: {donde} tiene {len(ini)} estados iniciales')
+        elif not ini and not compuesto:
+            avisos.append(f'{tag}: {donde} no tiene estado inicial')
+    for i, v in vert.items():
+        n, sa, en = _etiqueta(v), sal.get(i, []), ent.get(i, [])
+        kind = v.get('kind', 'initial') if v['_type'] == 'UMLPseudostate' else None
+        if kind == 'initial':
+            if en:
+                prob.append(f'{tag}: el estado inicial recibe transiciones')
+            if len(sa) != 1:
+                prob.append(f'{tag}: el estado inicial debe tener exactamente una transicion de salida (tiene {len(sa)})')
+            elif sa[0].get('triggers'):
+                avisos.append(f'{tag}: la transicion que sale del estado inicial no deberia tener disparador')
+        elif v['_type'] == 'UMLFinalState' or kind == 'terminate':
+            if sa:
+                prob.append(f'{tag}: {n} es final y tiene transiciones de salida')
+        elif kind in ('choice', 'junction'):
+            if len(sa) < 2:
+                avisos.append(f'{tag}: el punto de decision {n} tiene {len(sa)} salida(s); se esperan al menos 2')
+            if sum(1 for t in sa if not t.get('guard')) > 1:
+                avisos.append(f'{tag}: el punto de decision {n} tiene varias salidas sin guarda')
+        elif kind == 'fork' and (len(en) != 1 or len(sa) < 2):
+            avisos.append(f'{tag}: la bifurcacion {n} debe tener 1 entrada y 2 o mas salidas')
+        elif kind == 'join' and (len(en) < 2 or len(sa) != 1):
+            avisos.append(f'{tag}: la union {n} debe tener 2 o mas entradas y 1 salida')
+        elif v['_type'] == 'UMLState':
+            if not sa and not any(sal.get(a) for a in ancestros(i)):
+                avisos.append(f'{tag}: el estado {n} no tiene transiciones de salida ni es final')
+            vistos = {}
+            for t in sa:
+                clave = (tuple(sorted(_nombres(t.get('triggers')))), (t.get('guard') or '').strip())
+                vistos[clave] = vistos.get(clave, 0) + 1
+            for (disp, guarda), c in vistos.items():
+                if c > 1:
+                    avisos.append(f'{tag}: {n} tiene {c} transiciones con el mismo disparador {list(disp) or "(ninguno)"}'
+                                  f'{" y la misma guarda" if guarda else " y sin guarda"}: no se sabe cual se toma')
+    raiz = [i for r, ini in iniciales_de.items() for i in ini if dueno_de[r] not in vert]
+    if raiz:
+        def siguientes(i):
+            out = [t['target']['$ref'] for x in [i] + ancestros(i) for t in sal.get(x, []) if t.get('target')]
+            out += [j for r, ini in iniciales_de.items() if dueno_de[r] == i for j in ini]  # entrar al compuesto
+            return out + ancestros(i)
+        vistos = _alcanzables(raiz, siguientes)
+        for i, v in vert.items():
+            if v['_type'] in ('UMLState', 'UMLFinalState') and i not in vistos:
+                avisos.append(f'{tag}: no se puede llegar a {_etiqueta(v)} desde el estado inicial')
+
+
+def _reglas_actividad(doc, act, prob, avisos):
+    nodos, flujos, _, extremo = _actividad(doc, act)
+    tag = f'Actividad "{act.get("name")}"'
+    sal, ent = {}, {}
+    for f in flujos:
+        sal.setdefault(extremo(f, 'source'), []).append(f)
+        ent.setdefault(extremo(f, 'target'), []).append(f)
+    tipo = {i: NODOS_ACTIVIDAD.get(n['_type'], 'accion' if n['_type'].endswith('Action') else 'objeto') for i, n in nodos.items()}
+    iniciales = [i for i, t in tipo.items() if t == 'inicial']
+    if not nodos:
+        return
+    if not iniciales:
+        avisos.append(f'{tag}: no tiene nodo inicial')
+    elif len(iniciales) > 1:
+        avisos.append(f'{tag}: tiene {len(iniciales)} nodos iniciales')
+    for i, n in nodos.items():
+        nm, t, sa, en = _etiqueta(n), tipo[i], sal.get(i, []), ent.get(i, [])
+        if t == 'inicial':
+            if en:
+                prob.append(f'{tag}: el nodo inicial recibe flujos')
+            if not sa:
+                prob.append(f'{tag}: el nodo inicial no tiene flujo de salida')
+        elif t in ('final', 'fin_de_flujo'):
+            if sa:
+                prob.append(f'{tag}: el nodo final {nm} tiene flujos de salida')
+        elif t == 'decision':
+            if len(en) != 1 or len(sa) < 2:
+                avisos.append(f'{tag}: la decision {nm} debe tener 1 entrada y 2 o mas salidas (tiene {len(en)} y {len(sa)})')
+            guardas = [(f.get('guard') or '').strip() for f in sa]
+            if guardas.count('') > 1:
+                avisos.append(f'{tag}: la decision {nm} tiene varias salidas sin guarda')
+            if len({g for g in guardas if g}) < len([g for g in guardas if g]):
+                avisos.append(f'{tag}: la decision {nm} repite guardas')
+        elif t == 'fusion' and (len(en) < 2 or len(sa) != 1):
+            avisos.append(f'{tag}: la fusion {nm} debe tener 2 o mas entradas y 1 salida')
+        elif t == 'bifurcacion' and (len(en) != 1 or len(sa) < 2):
+            avisos.append(f'{tag}: la bifurcacion {nm} debe tener 1 entrada y 2 o mas salidas')
+        elif t == 'union' and (len(en) < 2 or len(sa) != 1):
+            avisos.append(f'{tag}: la union {nm} debe tener 2 o mas entradas y 1 salida')
+        elif t == 'accion':
+            if not n.get('name'):
+                avisos.append(f'{tag}: hay una accion sin nombre')
+            if len(en) > 1:
+                avisos.append(f'{tag}: {nm} recibe {len(en)} flujos (union implicita: espera a todos); usa un nodo de fusion')
+            if len(sa) > 1:
+                avisos.append(f'{tag}: {nm} tiene {len(sa)} flujos de salida (bifurcacion implicita); usa un nodo de decision o de bifurcacion')
+            if not sa:
+                avisos.append(f'{tag}: {nm} no lleva a ningun otro nodo ni a un nodo final')
+    if iniciales:
+        vistos = _alcanzables(iniciales, lambda i: [extremo(f, 'target') for f in sal.get(i, [])])
+        for i, n in nodos.items():
+            if i not in vistos and tipo[i] != 'inicial':
+                avisos.append(f'{tag}: no se puede llegar a {_etiqueta(n)} desde el nodo inicial')
+
+
+def reglas_comportamiento(doc):
+    """Reglas de los diagramas de estados y de actividades, y cajas encimadas en ellos."""
+    prob, avisos = [], []
+    for o in list(doc.ids.values()):
+        if o and o['_type'] == 'UMLStateMachine':
+            _reglas_estados(doc, o, prob, avisos)
+        elif o and o['_type'] == 'UMLActivity':
+            _reglas_actividad(doc, o, prob, avisos)
+    for dg in doc.diagrams():
+        if dg['_type'] not in ('UMLStatechartDiagram', 'UMLActivityDiagram'):
+            continue
+        cajas = []
+        for v in dg.get('ownedViews', []):
+            if 'points' in v or v['_type'] in ('UMLSwimlaneView', 'UMLFrameView') or v.get('visible', True) is False \
+                    or not all(isinstance(v.get(k), (int, float)) for k in ('left', 'top', 'width', 'height')):
+                continue
+            m = v.get('model')
+            nombre = _etiqueta(doc.ids[m['$ref']]) if isinstance(m, dict) and m.get('$ref') in doc.ids else 'nota'
+            cajas.append((nombre, v['left'], v['top'], v['left'] + v['width'], v['top'] + v['height']))
+        for i, x in enumerate(cajas):
+            for y in cajas[i + 1:]:
+                dentro = (x[1] <= y[1] and x[2] <= y[2] and y[3] <= x[3] and y[4] <= x[4]) or \
+                         (y[1] <= x[1] and y[2] <= x[2] and x[3] <= y[3] and x[4] <= y[4])  # subestado dentro del compuesto
+                if not dentro and x[1] < y[3] and y[1] < x[3] and x[2] < y[4] and y[2] < x[4]:
+                    avisos.append(f'{dg.get("name")}: cajas encimadas {x[0]} / {y[0]}')
     return {'problemas': prob, 'avisos': avisos}
 
 
@@ -1317,6 +1624,9 @@ AR13 = {**{c: 556 for c in 'abdeghnopqu0123456789'}, **{c: 500 for c in 'cksvxyz
         'L': 556, 'M': 833, 'J': 500, 'W': 944, 'Z': 611}
 
 
+AUTO_ANCHO, AUTO_ALTO, AUTO_ETIQUETA = 30, 15, 36  # lazo de un auto-mensaje y separacion de su texto
+
+
 def ancho13(t):
     return sum(AR13.get(c, 556) for c in t) * 13 / 1000
 
@@ -1364,6 +1674,7 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
     """Rehace por completo un diagrama de secuencia.
     lifelines: [{'clave': 'asesor', 'tipo': 'Asesor de Renta'}, ...] en orden de izquierda a derecha.
     mensajes: [{'de': clave, 'a': clave, 'nombre': 'buscarCliente(rfc)', 'reply': False, 'flujo': 'F1'}, ...]
+    Un mensaje con 'de' == 'a' es un auto-mensaje: se dibuja como lazo a la derecha con su activacion anidada.
     """
     op = _opciones_secuencia(opciones)
     rnd = random.Random(op['semilla'])
@@ -1386,8 +1697,6 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
         for k in ('de', 'a'):
             if m[k] not in claves:
                 raise MdjError(f'El mensaje "{m.get("nombre")}" usa la lifeline "{m[k]}", que no esta en la lista')
-        if m['de'] == m['a']:
-            raise MdjError(f'El mensaje "{m["nombre"]}" va de una lifeline a si misma; el generador no dibuja auto-mensajes')
 
     # roles y lifelines: se reusan los que ya existen para ese tipo (primero el rol que se llama como la clave),
     # pero cada clave recibe los suyos: dos lifelines del mismo tipo nunca comparten rol ni objeto
@@ -1429,6 +1738,9 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
         i, j = sorted((orden[m['de']], orden[m['a']]))
         if i != j:
             minimo[(i, j)] = max(minimo.get((i, j), 0), ancho13(f'{k + 1} : {m["nombre"]}') + op['margen_etiqueta'])
+        elif i + 1 < len(claves):
+            minimo[(i, i + 1)] = max(minimo.get((i, i + 1), 0),
+                                     AUTO_ETIQUETA + 14 + ancho13(f'{k + 1} : {m["nombre"]}') + op['margen_etiqueta'])
     centro_ll, ancho_ll = {}, {}
     x = None; prev_w = None
     for j, c in enumerate(claves):
@@ -1442,7 +1754,8 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
             if b == j and x < centro_ll[claves[a]] + mn:
                 x = centro_ll[claves[a]] + mn + rnd.randint(0, 8)
         centro_ll[c] = int(x); ancho_ll[c] = w; prev_w = w
-    min_izq = min([(centro_ll[m['de']] + centro_ll[m['a']]) / 2 - ancho13(f'{k + 1} : {m["nombre"]}') / 2 for k, m in enumerate(mensajes)] +
+    min_izq = min([(centro_ll[m['de']] + centro_ll[m['a']]) / 2 - ancho13(f'{k + 1} : {m["nombre"]}') / 2
+                   for k, m in enumerate(mensajes) if m['de'] != m['a']] +
                   [centro_ll[c] - ancho_ll[c] / 2 for c in claves])
     if min_izq < 22:
         corr = int(22 - min_izq) + rnd.randint(2, 7)
@@ -1459,6 +1772,8 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
             if flujo_de[k] != flujo_de[k - 1]:
                 g += rnd.randint(*op['extra_flujo'])
             g += rnd.randint(*op['espaciado_izq_der']) if (izq_de[k - 1] and not izq_de[k]) else rnd.randint(*op['espaciado'])
+            if mensajes[k - 1]['de'] == mensajes[k - 1]['a']:
+                g = max(g, AUTO_ALTO + 36 + rnd.randint(0, 6))
         salto.append(g)
     extra = [0] * len(mensajes)
 
@@ -1470,11 +1785,20 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
         return plan
 
     def activaciones(plan):
+        """Alto de cada activacion y, en auto-mensajes, cuantas activaciones de esa lifeline hay abiertas debajo.
+        La activacion de un auto-mensaje empieza donde vuelve el lazo y termina antes del siguiente mensaje."""
         alto, pila = {}, []
+        prof.clear()
 
         def cerrar(e, y_fin=None):
-            alto[e['k']] = max(y_fin - e['y0'], 20) if y_fin is not None else max(28, e['ultimo'] - e['y0'] + 10)
+            if e.get('auto'):
+                inicio = e['y0'] + AUTO_ALTO - 5
+                alto[e['k']] = max(16, y_fin - 6 - inicio) if y_fin is not None else 20
+            else:
+                alto[e['k']] = max(y_fin - e['y0'], 20) if y_fin is not None else max(28, e['ultimo'] - e['y0'] + 10)
         for k, (o, t, nom, rep, y) in enumerate(plan):
+            while pila and pila[-1].get('auto'):
+                cerrar(pila.pop(), y)
             if rep:
                 while pila and pila[-1]['ll'] != o:
                     cerrar(pila.pop())
@@ -1490,20 +1814,44 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
             else:
                 while pila:
                     cerrar(pila.pop())
-            pila.append({'ll': t, 'y0': y, 'k': k, 'ultimo': y})
+            if o == t:
+                prof[k] = sum(1 for e in pila if e['ll'] == t)
+            pila.append({'ll': t, 'y0': y, 'k': k, 'ultimo': y, 'auto': o == t})
         while pila:
             cerrar(pila.pop())
         return alto
+
+    prof = {}
+
+    def geometria_auto(k, x, y):
+        """(x del borde de la activacion que llama, left de la activacion anidada, top de esa activacion)."""
+        x0 = x + 7 * prof.get(k, 0)
+        return x0, x0 - 7, y + AUTO_ALTO - 5
+
+    def caja_etiqueta(k, o, t, nom, y):
+        lw = ancho13(f'{k + 1} : {nom}') + 4
+        if o == t:
+            x0 = geometria_auto(k, centro_ll[o], y)[0]
+            return x0 + AUTO_ETIQUETA, x0 + AUTO_ETIQUETA + lw, y + 1, y + 14
+        mx = (centro_ll[o] + centro_ll[t]) / 2
+        top, bot = (y + 3, y + 16) if izq_de[k] else (y - 16, y - 3)
+        return mx - lw / 2, mx + lw / 2, top, bot
     empujados = []
     for vuelta in range(120):
         plan = armar(); alto = activaciones(plan)
-        cajas = [(centro_ll[plan[k][1]] - 7, plan[k][4], centro_ll[plan[k][1]] + 7, plan[k][4] + h) for k, h in alto.items()]
+        cajas = []
+        for k, h in alto.items():
+            o, t, y = plan[k][0], plan[k][1], plan[k][4]
+            if o == t:
+                _, izq, arriba = geometria_auto(k, centro_ll[t], y)
+                cajas.append((izq, arriba, izq + 14, arriba + h))
+            else:
+                cajas.append((centro_ll[t] - 7, y, centro_ll[t] + 7, y + h))
         choque = None
         for k, (o, t, nom, rep, y) in enumerate(plan):
-            lw = ancho13(f'{k + 1} : {nom}') + 4; mx = (centro_ll[o] + centro_ll[t]) / 2
-            top, bot = (y + 3, y + 16) if izq_de[k] else (y - 16, y - 3)
+            e0, e1, top, bot = caja_etiqueta(k, o, t, nom, y)
             for (x0, y0, x1, y1) in cajas:
-                if x0 - 3 < mx + lw / 2 and x1 + 3 > mx - lw / 2 and y0 < bot and y1 + 2 > top:
+                if x0 - 3 < e1 and x1 + 3 > e0 and y0 < bot and y1 + 2 > top:
                     choque = (k, y1 + 2 - top + rnd.randint(1, 3)); break
             if choque:
                 break
@@ -1562,21 +1910,31 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
         texto = f'{k + 1} : {nom}'
         lw = round(ancho13(texto) + 4, 2); mx = (xo + xt) / 2
         vid = doc.new_id(); sv = [doc.new_id() for _ in range(4)]
+        if o == t:
+            x0, act_izq, act_top = geometria_auto(k, xo, y)
+            ex = x0 + AUTO_ETIQUETA
+            etiquetas = ((ex, y + 1), (ex, y - 14), (ex, y + AUTO_ALTO + 2))
+            actividad = (act_izq, act_top, alto[k])
+            puntos = f'{x0}:{y};{x0 + AUTO_ANCHO}:{y};{x0 + AUTO_ANCHO}:{y + AUTO_ALTO};{x0 + 7}:{y + AUTO_ALTO}'
+        else:
+            etiquetas = ((round(mx - lw / 2), y - 16 if xt > xo else y + 3), (round(mx), y - 31), (round(mx), y + 4))
+            actividad = (xt - 7, y, 25 if rep else alto[k])
+            puntos = f'{xo}:{y};{xt}:{y}'
         v = {'_type': 'UMLSeqMessageView', '_id': vid, '_parent': ref(dg['_id']), 'model': ref(mid),
              'subViews': [
                  {'_type': 'EdgeLabelView', '_id': sv[0], '_parent': ref(vid), 'model': ref(mid), 'font': 'Arial;13;0',
-                  'parentStyle': True, 'left': round(mx - lw / 2), 'top': y - 16 if xt > xo else y + 3, 'width': lw, 'height': 13,
+                  'parentStyle': True, 'left': etiquetas[0][0], 'top': etiquetas[0][1], 'width': lw, 'height': 13,
                   'alpha': 1.5707963267948966, 'distance': 10, 'hostEdge': ref(vid), 'edgePosition': 1, 'text': texto},
                  {'_type': 'EdgeLabelView', '_id': sv[1], '_parent': ref(vid), 'model': ref(mid), 'visible': False,
-                  'font': 'Arial;13;0', 'parentStyle': True, 'left': round(mx), 'top': y - 31, 'height': 13,
+                  'font': 'Arial;13;0', 'parentStyle': True, 'left': etiquetas[1][0], 'top': etiquetas[1][1], 'height': 13,
                   'alpha': 1.5707963267948966, 'distance': 25, 'hostEdge': ref(vid), 'edgePosition': 1},
                  {'_type': 'EdgeLabelView', '_id': sv[2], '_parent': ref(vid), 'model': ref(mid), 'visible': False,
-                  'font': 'Arial;13;0', 'parentStyle': True, 'left': round(mx), 'top': y + 4, 'height': 13,
+                  'font': 'Arial;13;0', 'parentStyle': True, 'left': etiquetas[2][0], 'top': etiquetas[2][1], 'height': 13,
                   'alpha': -1.5707963267948966, 'distance': 10, 'hostEdge': ref(vid), 'edgePosition': 1},
                  {'_type': 'UMLActivationView', '_id': sv[3], '_parent': ref(vid), 'model': ref(mid), 'font': 'Arial;13;0',
-                  'parentStyle': True, 'left': xt - 7, 'top': y, 'width': 14, 'height': 25 if rep else alto[k]}],
+                  'parentStyle': True, 'left': actividad[0], 'top': actividad[1], 'width': 14, 'height': actividad[2]}],
              'font': 'Arial;13;0', 'parentStyle': False, 'head': ref(linepart[t]), 'tail': ref(linepart[o]),
-             'points': f'{xo}:{y};{xt}:{y}',
+             'points': puntos,
              'nameLabel': ref(sv[0]), 'stereotypeLabel': ref(sv[1]), 'propertyLabel': ref(sv[2]), 'activation': ref(sv[3])}
         if rep:
             v['subViews'][3]['visible'] = False
@@ -1596,7 +1954,9 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
     inter['messages'] = nuevos
     dg['ownedViews'] = vistas
     derecha = max(centro_ll[c] + ancho_ll[c] - ancho_ll[c] // 2 for c in claves)
-    derecha = max([derecha] + [round((centro_ll[m['de']] + centro_ll[m['a']]) / 2 + ancho13(f'{k + 1} : {m["nombre"]}') / 2) for k, m in enumerate(mensajes)])
+    derecha = max([derecha] + [round(caja_etiqueta(k, o, t, nom, y)[1]) if o == t else
+                               round((centro_ll[o] + centro_ll[t]) / 2 + ancho13(f'{k + 1} : {nom}') / 2)
+                               for k, (o, t, nom, rep, y) in enumerate(plan)])
     for fr in frames:
         fr['left'] = 8; fr['top'] = 10; fr['width'] = derecha + 28 - 8; fr['height'] = fin + 26 - 10
         for s in fr.get('subViews', []):

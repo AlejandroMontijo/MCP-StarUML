@@ -20,7 +20,7 @@ El repositorio Git en `main` contiene exclusivamente el código fuente oficial y
 
 ```text
 MCP StarUML/
-├── server.py              # Servidor MCP central (32 herramientas registradas)
+├── server.py              # Servidor MCP central (33 herramientas registradas)
 ├── staruml_mdj.py         # Motor de lectura, manipulación JSON, validación y edición segura
 ├── staruml_render.py      # Exportación CLI de StarUML, revisión de SVG y recorte a PNG (Chrome)
 ├── staruml_compare.py     # Comparador de diagramas vs código y generador bidireccional
@@ -75,6 +75,8 @@ MCP StarUML/
 - Nada se pierde en silencio: el importador de código es aditivo por defecto (`modo: "sincronizar"` explícito), el generador no sobrescribe sin `sobrescribir: true` y la regeneración de secuencias conserva las notas.
 - La detección de "StarUML abierto" cubre macOS, Linux y Windows y bloquea si no puede verificar (`forzar: true` para omitirla).
 - Render portable: StarUML y Chrome se buscan en rutas típicas, `PATH` y `STARUML_MCP_STARUML_BIN` / `STARUML_MCP_CHROME_BIN`; sin `sips` ni `perl`.
+- Fase 3 completa: bitácora por `stderr` (`STARUML_MCP_LOG_LEVEL`), coherencia caso de uso ↔ paquete de robustez, generador C#, parsers de Kotlin y Go, auto-mensajes en `mdj_secuencia_generar`, y lectura (`mdj_comportamiento`) y validación de diagramas de estados y de actividades.
+- La geometría de los auto-mensajes sigue la forma estándar de UML; falta confirmarla abriendo el archivo en StarUML.
 
 ## 4. Convenciones y Reglas Inquebrantables
 

@@ -100,6 +100,50 @@ def test_reglas_oose_de_mensajes(modelo):
     assert not any('entity->entity sin asociacion' in p for p in prob)  # Cuenta--Sesion estan asociadas
 
 
+
+def test_auto_mensajes(modelo):
+    ms = [{'de': 'usr', 'a': 'ui', 'nombre': 'ingresar(usuario)'},
+          {'de': 'ui', 'a': 'ctrl', 'nombre': 'autenticar(usuario)'},
+          {'de': 'ctrl', 'a': 'ctrl', 'nombre': 'validarFormatoDeUsuario(usuario)'},
+          {'de': 'ctrl', 'a': 'cta', 'nombre': 'buscarCuenta(usuario)'},
+          {'de': 'cta', 'a': 'ctrl', 'nombre': 'cuenta', 'reply': True},
+          {'de': 'ctrl', 'a': 'ctrl', 'nombre': 'registrarIntento()'},
+          {'de': 'ctrl', 'a': 'ui', 'nombre': 'mostrarResultado()'}]
+    r = ok(tool('mdj_secuencia_generar', archivo=modelo, diagrama='cu_1_FB', lifelines=LIFELINES, mensajes=ms))
+    assert r['mensajes'] == 7 and not any('AVISO' in a for a in r['ajustes'])
+    assert r['oose'] == {'problemas': [], 'avisos': []}, r['oose']
+    assert ids_integros(modelo)
+    doc = M.Doc(modelo)
+    sec = M.secuencia(doc, 'cu_1_FB')
+    assert [m['tipos'] for m in sec['mensajes']][2] == 'control->control'
+    dg = doc.diagram('cu_1_FB')
+    vistas = {doc.ids[v['model']['$ref']]['name']: v for v in dg['ownedViews'] if v['_type'] == 'UMLSeqMessageView'}
+    auto, antes = vistas['validarFormatoDeUsuario(usuario)'], vistas['autenticar(usuario)']
+    assert auto['head'] == auto['tail']
+    pts = [tuple(map(float, p.split(':'))) for p in auto['points'].split(';')]
+    assert len(pts) == 4 and pts[0][1] == pts[1][1] and pts[2][1] == pts[3][1] > pts[0][1]  # lazo hacia la derecha
+    act = next(x for x in auto['subViews'] if x['_type'] == 'UMLActivationView')
+    act_ctrl = next(x for x in antes['subViews'] if x['_type'] == 'UMLActivationView')
+    assert act['left'] == act_ctrl['left'] + 7  # anidada sobre la activacion del control
+    assert act_ctrl['top'] < act['top'] and act['top'] + act['height'] <= act_ctrl['top'] + act_ctrl['height']
+    etiqueta = auto['subViews'][0]
+    assert etiqueta['left'] > pts[1][0] and etiqueta['text'] == '3 : validarFormatoDeUsuario(usuario)'
+    # la etiqueta cabe antes de la siguiente lifeline
+    centro_cta = next(float(v['points'].split(';')[1].split(':')[0]) for v in vistas.values()
+                      if doc.ids[v['model']['$ref']]['name'] == 'buscarCuenta(usuario)')
+    assert etiqueta['left'] + etiqueta['width'] < centro_cta - 7
+    siguiente = vistas['buscarCuenta(usuario)']
+    assert float(siguiente['points'].split(';')[0].split(':')[1]) > act['top'] + act['height']
+
+
+def test_auto_mensajes_fuera_de_la_logica(modelo):
+    ms = [{'de': 'usr', 'a': 'usr', 'nombre': 'pensar()'}, {'de': 'usr', 'a': 'ui', 'nombre': 'pedir()'},
+          {'de': 'ui', 'a': 'ui', 'nombre': 'calcular()'}]
+    r = ok(tool('mdj_secuencia_generar', archivo=modelo, diagrama='cu_1_FB', lifelines=LIFELINES, mensajes=ms))
+    assert any('Auto-mensaje en un actor' in p for p in r['oose']['problemas'])
+    assert any('Auto-mensaje en una boundary' in a for a in r['oose']['avisos'])
+    assert ids_integros(modelo)
+
 # --- vistas, lineas y nombres ---
 
 def test_renombrar_lifeline_sin_nombre_y_clase(modelo):

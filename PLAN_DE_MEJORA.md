@@ -2,7 +2,7 @@
 
 > Resultado de una campaña de pruebas en busca de bugs sobre `main` (commit `6c118c2`, 2026-09-29) y de la revisión del plan v2.0 propuesto anteriormente. **Cada hallazgo de este documento se reprodujo**; ninguno es especulativo.
 
-> **Estado:** ✅ Fases 0, 1 y 2 completadas, y la Fase 3 en parte. Los 56 bugs están corregidos y cubiertos por la suite `tests/` (119 pruebas en verde en Python 3.9 y 3.11), que además se ejecuta sobre el caso de uso real del equipo cuando está en `pruebas/`. Ver §9.
+> **Estado:** ✅ Fases 0, 1, 2 y 3 completadas. Los 56 bugs están corregidos y cubiertos por la suite `tests/` (144 pruebas en verde; CI en Ubuntu, macOS y Windows con Python 3.9 y 3.12), que además se ejecuta sobre el caso de uso real del equipo cuando está en `pruebas/`. Ver §9.
 
 ---
 
@@ -202,7 +202,7 @@ Incorpora los puntos 1.1–1.4 del plan v2.0, ajustados.
 | 1.3 ✅ | **Datos mínimos pero válidos no deben tumbar herramientas**: `.get('ownedViews', [])` en todos los accesos; resolver los tipos `{"$ref"}` al nombre de la clase; `o.get('name')` en `reglas_oose`; ejecutar `reglas_oose` antes de guardar; convertir el JSON inválido en `MdjError`; validar las `opciones`. | B04–B07, B13–B15, C02 |
 | 1.4 ✅ | **Render portable**: `shutil.which`, rutas de Windows/Linux y las variables `STARUML_MCP_STARUML_BIN`/`STARUML_MCP_CHROME_BIN`. Redimensionar sin `sips` (tamaño de ventana y factor de escala de Chrome). Usar `pkill` solo donde exista. | P03, P04 |
 | 1.5 ✅ | **Caché de renders correcta**: la clave debe ser hash(ruta absoluta del `.mdj` + id del diagrama + mtime), sin fallback al "SVG más reciente", y `ver_visual` debe pasar el **id** a `exportar`. | P07–P09 |
-| 1.6 ◐ | **Configuración y logging** (v2.0 §1.2–1.3): timeouts, binarios, rotación de respaldos con `STARUML_MCP_BACKUP_KEEP` y nivel de log validado. | respaldos |
+| 1.6 ✅ | **Configuración y logging** (v2.0 §1.2–1.3): timeouts, binarios, rotación de respaldos con `STARUML_MCP_BACKUP_KEEP` y nivel de log validado. | respaldos |
 | 1.7 ✅ | **Sandbox de rutas** (v2.0 §1.4, corregido). Las rutas relativas se resuelven contra la carpeta del `.mdj`. | B16 |
 | 1.8 ✅ | **Protocolo y tamaño de respuesta**: batch según la versión negociada, `-32600` para solicitudes inválidas y ninguna respuesta a notificaciones. JSON compacto, y paginación (`limite`, `desde`) en `mdj_modelo`, `mdj_buscar` y `mdj_geometria`. | J01–J03 |
 
@@ -220,13 +220,13 @@ Incorpora los puntos 1.1–1.4 del plan v2.0, ajustados.
 ### Fase 3: capacidades nuevas (bajo demanda)
 Re-priorizadas desde el plan v2.0 y los hallazgos.
 
-1. **Herramientas para crear actores, paquetes y diagramas** (B17). Sin ellas no se puede construir un proyecto desde cero.
-2. **Pulido de vistas**: `UMLInterfaceView` (B09), asociación reflexiva con lazo (B10), renombrar sin concatenar (B08) y un `svg_revisar` tolerante a atributos faltantes (P10).
-3. **Auto-mensajes en secuencias** (v2.0 §2.3).
-4. **OOSE extendida y acotada** (v2.0 §2.5), más la **consistencia casos de uso ↔ robustez** (v2.0 §2.4 reformulado) dentro de `mdj_validar`.
-5. **Generador C#** (v2.0 §2.1), después de 2.5.
-6. **Diagramas de estados y de actividades** (v2.0 §3.1–3.2).
-7. **Parsers Kotlin y Go** (v2.0 §2.2, §3.3), después de 2.1.
+1. ✅ **Herramientas para crear actores, paquetes y diagramas** (B17). Sin ellas no se puede construir un proyecto desde cero.
+2. ✅ **Pulido de vistas**: `UMLInterfaceView` (B09), asociación reflexiva con lazo (B10), renombrar sin concatenar (B08) y un `svg_revisar` tolerante a atributos faltantes (P10).
+3. ✅ **Auto-mensajes en secuencias** (v2.0 §2.3).
+4. ✅ **OOSE extendida y acotada** (v2.0 §2.5), más la **consistencia casos de uso ↔ robustez** (v2.0 §2.4 reformulado) dentro de `mdj_validar`.
+5. ✅ **Generador C#** (v2.0 §2.1), después de 2.5.
+6. ✅ **Diagramas de estados y de actividades** (v2.0 §3.1–3.2): lectura y validación.
+7. ✅ **Parsers Kotlin y Go** (v2.0 §2.2, §3.3), después de 2.1.
 
 **Descartado:** Content-Length (rompe MCP) y LSP para `.mdj` (no tiene caso de uso).
 
@@ -339,11 +339,17 @@ PYTHONIOENCODING=cp1252 python3 server.py
   - métricas honestas (actores, replies, multiplicidad, navegabilidad y flujo de llamadas);
   - generadores que compilan (`javac`, `tsc --strict`, `import`) y vuelven al 100 % al compararse;
   - importador con tipos y métodos, colocación sin encimar y modos `agregar`/`sincronizar`.
-- **Fase 3 (parcial):**
+- **Fase 3:**
   - `mdj_paquete_crear`, `mdj_diagrama_crear` y actores en `mdj_clase_crear`;
   - `UMLInterfaceView`, asociación reflexiva con lazo y renombrar sin concatenar;
   - `svg_revisar` tolerante;
-  - avisos de notación, estereotipos como texto y cajas encimadas.
+  - avisos de notación, estereotipos como texto y cajas encimadas;
+  - bitácora por `stderr` con nivel validado (`STARUML_MCP_LOG_LEVEL`): llamadas y argumentos en `DEBUG`, tiempos y respaldos en `INFO`, trazas completas de errores inesperados;
+  - coherencia caso de uso ↔ paquete de robustez homónimo (control, boundaries, actores del caso de uso con su boundary, herencia de actores, casos de uso sin analizar);
+  - generador C# (propiedades automáticas, `namespace`), compilado con `dotnet` y de vuelta al 100 %, también con el modelo real;
+  - parsers de Kotlin (constructor primario, `enum class`, `object`, tipos inferidos) y Go (structs, interfaces, embebidos, métodos con receptor, `iota`);
+  - auto-mensajes en `mdj_secuencia_generar` (lazo, activación anidada, texto sin pisar la siguiente lifeline) y su regla OOSE;
+  - `mdj_comportamiento` (lectura de estados y actividades) y sus reglas en `mdj_validar`.
 
 **Hallazgos adicionales que aparecieron al construir la suite (corregidos)**
 - `ps` recortaba la línea de comando a 80 columnas sin terminal. Con StarUML en una ruta larga (p. ej. `~/Applications` y un usuario de nombre largo) la protección dejaba de reconocerlo. Se usa `ps -ww`.
@@ -351,11 +357,8 @@ PYTHONIOENCODING=cp1252 python3 server.py
 - Las referencias adelantadas de Python (`List["Pedido"]`) quedaban con comillas en el tipo.
 - Con el modelo real, los identificadores `BC_*` perdían el guion bajo al generar código, y las asociaciones hacia actores generaban campos de clases inexistentes.
 
-**Pendiente (mejoras, no bugs)**
-- Logging estructurado (plan v2.0 §1.2).
-- Auto-mensajes en secuencias.
-- Generador C#.
-- Parsers Kotlin y Go.
-- Consistencia casos de uso ↔ robustez en `mdj_validar`.
-- Diagramas de estados y de actividades.
+**Pendiente (verificación manual, no bugs)**
 - La exportación real con StarUML y `svg_revisar` sobre SVG auténtico solo se probaron con dobles; conviene una corrida en una máquina con StarUML.
+- La geometría de los auto-mensajes sigue la forma estándar de UML y no hay auto-mensajes en el modelo real para compararla: falta abrir uno generado en StarUML y confirmar que se ve igual.
+- Las reglas de estados y actividades se probaron con modelos sintéticos que siguen el metamodelo de StarUML; conviene validarlas con un diagrama de estados o de actividades hecho en la aplicación.
+- Generadores de Kotlin y Go (hoy solo se leen) si se necesitan.

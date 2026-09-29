@@ -26,6 +26,7 @@ def test_integro_y_sin_problemas_oose(real):
     assert v['n_duplicados'] == v['n_colgantes'] == v['n_parent_mismatch'] == 0
     assert v['oose']['problemas'] == [], v['oose']['problemas']
     assert v['oose']['avisos'] == [], v['oose']['avisos']
+    assert v['comportamiento'] == {'problemas': [], 'avisos': []}, v['comportamiento']
 
 
 def test_reglas_de_robustez_del_caso_de_uso(real):
@@ -75,8 +76,8 @@ def _especificacion(doc, dg):
     mensajes = []
     for m in it.get('messages', []):
         s, t = m['source']['$ref'], m['target']['$ref']
-        if s == t or s not in clave or t not in clave:
-            return None, None  # auto-mensajes o gates: el generador no los dibuja
+        if s not in clave or t not in clave:
+            return None, None  # gates y mensajes perdidos/encontrados: el generador no los dibuja
         mensajes.append({'de': clave[s], 'a': clave[t], 'nombre': m.get('name') or '?', 'reply': m.get('messageSort') == 'reply'})
     return lifelines, mensajes
 

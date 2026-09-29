@@ -190,6 +190,92 @@ def modelo_dominio(path, tipo_ref=False, nav_item='notNavigable'):
     return path
 
 
+
+def modelo_comportamiento(path):
+    """Maquina de estados 'Ciclo de pedido' (con un estado compuesto y un punto de decision) y actividad
+    'Procesar pedido' (decision, bifurcacion, union y fusion), cada una con su diagrama. Sin problemas ni avisos."""
+    guardar_json(proyecto_vacio(), path)
+    doc = M.Doc(path)
+    raiz = next(o for o in doc.ids.values() if o and o['_type'] == 'UMLModel')
+
+    def el(tipo, padre, **kw):
+        return {'_type': tipo, '_id': doc.new_id(), '_parent': ref(padre['_id']), **kw}
+
+    sm = el('UMLStateMachine', raiz, name='Ciclo de pedido')
+    reg = el('UMLRegion', sm)
+    sm['regions'] = [reg]
+    v = {}
+    for clave, tipo, kw in (('ini', 'UMLPseudostate', {'kind': 'initial'}), ('creado', 'UMLState', {'name': 'Creado'}),
+                            ('dec', 'UMLPseudostate', {'kind': 'choice'}), ('pagado', 'UMLState', {'name': 'Pagado'}),
+                            ('prep', 'UMLState', {'name': 'En preparación'}), ('enviado', 'UMLState', {'name': 'Enviado'}),
+                            ('fin', 'UMLFinalState', {})):
+        v[clave] = el(tipo, reg, **kw)
+    reg['vertices'] = list(v.values())
+    sub = el('UMLRegion', v['prep'])
+    v['prep']['regions'] = [sub]
+    for clave, tipo, kw in (('ini2', 'UMLPseudostate', {'kind': 'initial'}), ('empacando', 'UMLState', {'name': 'Empacando'}),
+                            ('etiquetando', 'UMLState', {'name': 'Etiquetando'})):
+        v[clave] = el(tipo, sub, **kw)
+    sub['vertices'] = [v['ini2'], v['empacando'], v['etiquetando']]
+    v['pagado']['doActivities'] = [el('UMLOpaqueBehavior', v['pagado'], name='notificar al almacén')]
+
+    def trans(region, a, b, disparador=None, guarda=None):
+        t = el('UMLTransition', region, source=ref(v[a]['_id']), target=ref(v[b]['_id']))
+        if disparador:
+            t['triggers'] = [el('UMLEvent', t, name=disparador)]
+        if guarda:
+            t['guard'] = guarda
+        region.setdefault('transitions', []).append(t)
+        return t
+    trans(reg, 'ini', 'creado')
+    trans(reg, 'creado', 'dec', 'pagar')
+    trans(reg, 'dec', 'pagado', guarda='pago válido')
+    trans(reg, 'dec', 'creado', guarda='else')
+    trans(reg, 'pagado', 'prep')
+    trans(reg, 'prep', 'enviado', 'listo')
+    trans(reg, 'enviado', 'fin', 'entregado')
+    trans(sub, 'ini2', 'empacando')
+    trans(sub, 'empacando', 'etiquetando', 'empacado')
+    dge = el('UMLStatechartDiagram', sm, name='estados_pedido')
+    dge['ownedViews'] = [
+        el('UMLStateView', dge, model=ref(v['prep']['_id']), left=300, top=40, width=260, height=160),
+        el('UMLStateView', dge, model=ref(v['empacando']['_id']), left=320, top=90, width=100, height=40),
+        el('UMLStateView', dge, model=ref(v['creado']['_id']), left=40, top=40, width=100, height=40)]
+    sm['ownedElements'] = [dge]
+
+    act = el('UMLActivity', raiz, name='Procesar pedido')
+    n = {}
+    for clave, tipo, nombre in (('ini', 'UMLInitialNode', None), ('recibir', 'UMLAction', 'Recibir pedido'),
+                                ('dec', 'UMLDecisionNode', None), ('rechazar', 'UMLAction', 'Rechazar pedido'),
+                                ('cobrar', 'UMLAction', 'Cobrar'), ('fork', 'UMLForkNode', None),
+                                ('empacar', 'UMLAction', 'Empacar'), ('facturar', 'UMLAction', 'Facturar'),
+                                ('join', 'UMLJoinNode', None), ('merge', 'UMLMergeNode', None), ('fin', 'UMLActivityFinalNode', None)):
+        n[clave] = el(tipo, act, **({'name': nombre} if nombre else {}))
+    act['nodes'] = list(n.values())
+    act['edges'] = []
+
+    def flujo(a, b, guarda=None):
+        f = el('UMLControlFlow', act, source=ref(n[a]['_id']), target=ref(n[b]['_id']))
+        if guarda:
+            f['guard'] = guarda
+        act['edges'].append(f)
+        return f
+    for a, b, g in (('ini', 'recibir', None), ('recibir', 'dec', None), ('dec', 'rechazar', 'sin existencias'),
+                    ('dec', 'cobrar', 'con existencias'), ('cobrar', 'fork', None), ('fork', 'empacar', None),
+                    ('fork', 'facturar', None), ('empacar', 'join', None), ('facturar', 'join', None),
+                    ('join', 'merge', None), ('rechazar', 'merge', None), ('merge', 'fin', None)):
+        flujo(a, b, g)
+    part = el('UMLActivityPartition', act, name='Almacén', nodes=[ref(n['empacar']['_id'])])
+    act['groups'] = [part]
+    dga = el('UMLActivityDiagram', act, name='actividad_pedido')
+    dga['ownedViews'] = [el('UMLActionView', dga, model=ref(n['recibir']['_id']), left=40, top=80, width=120, height=40),
+                         el('UMLActionView', dga, model=ref(n['cobrar']['_id']), left=40, top=160, width=120, height=40)]
+    act['ownedElements'] = [dga]
+    raiz['ownedElements'] += [sm, act]
+    doc.reindex()
+    doc.save(backup=False)
+    return path
+
 def fuentes(carpeta, archivos):
     """Escribe archivos de codigo (texto con sangria comun eliminada) y devuelve la carpeta."""
     for nombre, src in archivos.items():

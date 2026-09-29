@@ -77,7 +77,7 @@ Las rutas relativas de `salida`, `carpeta`, `carpeta_salida` y `ruta_codigo` se 
 
 ---
 
-## Catálogo de Herramientas (32)
+## Catálogo de Herramientas (33)
 
 ### Inspección Visual y Renderizado
 | Herramienta | Descripción |
@@ -102,9 +102,10 @@ Las rutas relativas de `salida`, `carpeta`, `carpeta_salida` y `ruta_codigo` se 
 | `mdj_resumen` | Lista diagramas del archivo, vistas, diagrama por defecto y conteo por estereotipo. |
 | `mdj_modelo` | Extrae clases, atributos, métodos, documentación y asociaciones con roles y multiplicidades. |
 | `mdj_secuencia` | Extrae la secuencia ordenada de mensajes, lifelines, tipos y respuestas (replies). |
+| `mdj_comportamiento` | Lee un diagrama de estados (estados, compuestos, actividades entry/do/exit y transiciones con disparador, guarda y efecto) o de actividades (acciones, nodos de control, particiones y flujos con guarda). |
 | `mdj_geometria` | Coordenadas, dimensiones e identificadores de vistas de cajas y líneas de un diagrama. |
 | `mdj_buscar` | Búsqueda flexible de elementos por nombre, texto o tipo UML (`UMLClass`, `UMLAssociation`, etc.). |
-| `mdj_validar` | Valida integridad estructural (IDs duplicados, referencias rotas) y reglas OOSE/robustez, notación de íconos, estereotipos guardados como texto, cajas encimadas y coherencia entre cada caso de uso y su paquete de análisis. |
+| `mdj_validar` | Valida integridad estructural (IDs duplicados, referencias rotas) y reglas OOSE/robustez, notación de íconos, estereotipos guardados como texto, cajas encimadas, coherencia entre cada caso de uso y su paquete de análisis, y reglas de diagramas de estados y de actividades. |
 | `mdj_diff` | Calcula diferencias semánticas y estructurales entre dos archivos `.mdj`. |
 
 ### Edición Segura del Modelo
@@ -125,7 +126,7 @@ Las rutas relativas de `salida`, `carpeta`, `carpeta_salida` y `ruta_codigo` se 
 | `mdj_linea_ruta` | Define los puntos de quiebre de una línea calculando los extremos de conexión con las cajas. |
 | `mdj_linea_etiqueta` | Ajusta la posición de etiquetas de multiplicidad, rol o nombre (alpha y distance). |
 | `mdj_nota` | Crea o edita notas explicativas con cálculo automático de dimensiones según el texto. |
-| `mdj_secuencia_generar` | Genera o regenera por completo un diagrama de secuencia a partir de especificación de lifelines y mensajes. |
+| `mdj_secuencia_generar` | Genera o regenera por completo un diagrama de secuencia a partir de especificación de lifelines y mensajes (incluidos auto-mensajes). |
 
 ---
 

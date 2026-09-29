@@ -70,9 +70,29 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
 - Separación entre lifelines: al menos lo que mide la etiqueta más larga que viaja entre
   ellas, más un margen. Si una etiqueta cae sobre una activación abierta, se baja el
   mensaje.
+- Auto-mensaje (`de` igual a `a`): lazo de 30 × 15 px a la derecha de la activación que
+  llama, activación anidada 7 px a la derecha y texto a la derecha del lazo. Se permite en
+  control y entity (procesamiento interno); en una boundary es aviso (la lógica va en el
+  control) y en un actor es error.
 - Lifelines: height = fin - 40; linePart top = 106 y height = h - 66. El marco se ajusta
   al contenido.
 - Una lifeline sin nombre con rol tipado se ve como ": Tipo".
+
+## Diagramas de estados y de actividades
+
+- `mdj_comportamiento` lee la máquina de estados o la actividad a la que pertenece el
+  diagrama. `mdj_validar` revisa:
+  - Estados: un solo estado inicial por región (la principal debe tenerlo), el inicial con
+    una sola salida y sin entradas, finales sin salidas, estados inalcanzables desde el
+    inicial o sin salida (las transiciones del estado compuesto cuentan para sus
+    subestados), decisiones con al menos dos salidas y guardas, y transiciones ambiguas
+    (mismo disparador y misma guarda desde un estado).
+  - Actividades: un nodo inicial, finales sin salidas, decisiones con guardas distintas,
+    fusión/bifurcación/unión con sus entradas y salidas, acciones con varias entradas
+    (unión implícita: usa un nodo de fusión) o varias salidas (usa decisión o
+    bifurcación), nodos inalcanzables y acciones que no llevan a un final.
+  - Cajas encimadas (un subestado dentro de su estado compuesto no cuenta).
+- Una actividad anidada (p. ej. la actividad *do* de un estado) se valida por separado.
 
 ## Exportar y revisar
  

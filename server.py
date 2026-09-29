@@ -149,6 +149,15 @@ def t_secuencia(a):
     return M.secuencia(M.Doc(a['archivo']), a['diagrama'])
 
 
+@tool('mdj_comportamiento', 'Estados (con su estado compuesto y actividades entry/do/exit) y transiciones (disparadores, '
+      'guarda y efectos) de un diagrama de estados, o nodos (acciones, decisiones, bifurcaciones, particiones) y flujos '
+      'con su guarda de un diagrama de actividades.',
+      obj({'archivo': ARCHIVO, 'diagrama': S(description='Nombre o id del diagrama de estados o de actividades')},
+          ['archivo', 'diagrama']), ro('Estados y actividades'))
+def t_comportamiento(a):
+    return M.comportamiento(M.Doc(a['archivo']), a['diagrama'])
+
+
 @tool('mdj_geometria', 'Cajas (posicion y tamano) y lineas (puntos) de un diagrama, con el id de cada vista.',
       obj({'archivo': ARCHIVO, 'diagrama': S()}, ['archivo', 'diagrama']), ro('Geometria'))
 def t_geometria(a):
@@ -164,7 +173,10 @@ def t_buscar(a):
 
 @tool('mdj_validar', 'Integridad (ids duplicados, referencias colgantes, _parent que no coincide) y, si oose=true, reglas de '
       'robustez: metodos o atributos donde no van, mas de un control, asociaciones prohibidas, mensajes no validos, '
-      'entity->entity sin asociacion, consultas sin reply, vistas de mensaje incompletas y llamadas sin activacion.',
+      'entity->entity sin asociacion, consultas sin reply, vistas de mensaje incompletas y llamadas sin activacion; '
+      'ademas, reglas de diagramas de estados (inicial unico, finales sin salida, estados inalcanzables o sin salida, '
+      'decisiones sin guarda, transiciones ambiguas) y de actividades (uniones y bifurcaciones implicitas, nodos '
+      'inalcanzables, decisiones sin guarda).',
       obj({'archivo': ARCHIVO, 'oose': B(description='Revisar tambien reglas OOSE (default true)')}, ['archivo']),
       ro('Validar'))
 def t_validar(a):
@@ -543,8 +555,9 @@ def t_nota(a):
 
 @tool('mdj_secuencia_generar', 'Rehace por completo un diagrama de secuencia a partir de la lista de lifelines y mensajes, '
       'con las reglas de trabajo: vistas completas, espaciado 29-36 / 50-56 / extra entre flujos, activaciones con pila de '
-      'llamadas, separacion de lifelines segun el ancho de las etiquetas y ninguna etiqueta sobre activaciones. Reusa roles '
-      'y lifelines existentes del mismo tipo y conserva el marco.',
+      'llamadas, separacion de lifelines segun el ancho de las etiquetas y ninguna etiqueta sobre activaciones. Un mensaje '
+      'con de == a es un auto-mensaje (lazo a la derecha con activacion anidada). Reusa roles y lifelines existentes del '
+      'mismo tipo y conserva el marco.',
       obj({'archivo': ARCHIVO, 'diagrama': S(),
            'lifelines': {'type': 'array', 'description': 'En orden de izquierda a derecha',
                          'items': obj({'clave': S(), 'tipo': S(description='Nombre o id de la clase/actor')}, ['clave', 'tipo'])},
