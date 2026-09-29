@@ -20,10 +20,11 @@ El repositorio Git en `main` contiene exclusivamente el código fuente oficial y
 
 ```text
 MCP StarUML/
-├── server.py              # Servidor MCP central (33 herramientas registradas)
+├── server.py              # Servidor MCP central (34 herramientas registradas)
 ├── staruml_mdj.py         # Motor de lectura, manipulación JSON, validación y edición segura
 ├── staruml_render.py      # Exportación CLI de StarUML, revisión de SVG y recorte a PNG (Chrome)
 ├── staruml_compare.py     # Comparador de diagramas vs código y generador bidireccional
+├── staruml_programa.py    # Diagrama de clases de un programa ya hecho (acomodo por capas y ruteo sin cruces)
 ├── reglas.md              # Convenciones de modelado, OOSE, secuencias y arquitectura
 ├── README.md              # Documentación genérica y profesional para open source
 ├── CLAUDE.md              # Este archivo de memoria y contexto para Claude Code
@@ -77,6 +78,7 @@ MCP StarUML/
 - Render portable: StarUML y Chrome se buscan en rutas típicas, `PATH` y `STARUML_MCP_STARUML_BIN` / `STARUML_MCP_CHROME_BIN`; sin `sips` ni `perl`.
 - Fase 3 completa: bitácora por `stderr` (`STARUML_MCP_LOG_LEVEL`), coherencia caso de uso ↔ paquete de robustez, generador C#, parsers de Kotlin y Go, auto-mensajes en `mdj_secuencia_generar`, y lectura (`mdj_comportamiento`) y validación de diagramas de estados y de actividades.
 - La geometría de los auto-mensajes sigue la forma estándar de UML; falta confirmarla abriendo el archivo en StarUML.
+- `staruml_programa_a_diagrama` (v2.1.0) dibuja el diagrama de clases de un programa Java completo. Las vistas de enumeración y de realización de interfaz siguen el metamodelo de StarUML pero solo se confirman con `tests/test_staruml_real.py` en una máquina con StarUML. Como la regla de análisis de `reglas_oose` se mantiene, `mdj_validar` marca los métodos de esas clases de diseño.
 
 ## 4. Convenciones y Reglas Inquebrantables
 

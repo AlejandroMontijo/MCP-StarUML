@@ -352,3 +352,138 @@ class ClienteMCP:
         out = self.p.stdout.read().decode('utf-8').splitlines()
         self.p.wait(15)
         return out
+
+
+# Programa Java de ejemplo para staruml_programa_a_diagrama: dos paquetes, clase abstracta, interfaz, enum, record,
+# asociacion en ambos sentidos, colecciones, un Map, un campo static y una clase de pruebas (que se omite).
+PROGRAMA_JAVA = {
+    'src/main/java/com/tienda/modelo/Cliente.java': '''\
+package com.tienda.modelo;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class Cliente extends Persona implements Notificable {
+    private List<Pedido> pedidos = new ArrayList<>();
+    private Direccion direccion;
+    private static int contador = 0;
+
+    public Cliente(String nombre) { this.nombre = nombre; }
+
+    @Override
+    public String describir() { return "Cliente " + nombre; }
+
+    public void agregarPedido(Pedido p) { pedidos.add(p); }
+
+    public void notificar(String mensaje) { }
+}
+''',
+    'src/main/java/com/tienda/modelo/Direccion.java': '''\
+package com.tienda.modelo;
+
+public record Direccion(String calle, String ciudad, String cp) { }
+''',
+    'src/main/java/com/tienda/modelo/Empleado.java': '''\
+package com.tienda.modelo;
+
+public class Empleado extends Persona {
+    private double salario;
+    public String describir() { return "Empleado " + nombre; }
+}
+''',
+    'src/main/java/com/tienda/modelo/EstadoPedido.java': '''\
+package com.tienda.modelo;
+
+public enum EstadoPedido { NUEVO, PAGADO, ENVIADO, ENTREGADO }
+''',
+    'src/main/java/com/tienda/modelo/LineaPedido.java': '''\
+package com.tienda.modelo;
+
+public class LineaPedido {
+    private Producto producto;
+    private int cantidad;
+    public LineaPedido(Producto producto, int cantidad) { this.producto = producto; this.cantidad = cantidad; }
+    public double subtotal() { return producto.getPrecio() * cantidad; }
+}
+''',
+    'src/main/java/com/tienda/modelo/Notificable.java': '''\
+package com.tienda.modelo;
+
+public interface Notificable {
+    void notificar(String mensaje);
+}
+''',
+    'src/main/java/com/tienda/modelo/Pedido.java': '''\
+package com.tienda.modelo;
+
+import java.time.LocalDate;
+import java.util.List;
+import java.util.ArrayList;
+
+public class Pedido {
+    private int folio;
+    private LocalDate fecha;
+    private EstadoPedido estado = EstadoPedido.NUEVO;
+    private Cliente cliente;
+    private final List<LineaPedido> lineas = new ArrayList<>();
+
+    public double calcularTotal() {
+        double total = 0;
+        for (LineaPedido l : lineas) total += l.subtotal();
+        return total;
+    }
+    public void agregarLinea(Producto producto, int cantidad) { lineas.add(new LineaPedido(producto, cantidad)); }
+}
+''',
+    'src/main/java/com/tienda/modelo/Persona.java': '''\
+package com.tienda.modelo;
+
+public abstract class Persona {
+    protected String nombre;
+    private String email;
+
+    public String getNombre() { return nombre; }
+    public void setNombre(String nombre) { this.nombre = nombre; }
+    public abstract String describir();
+}
+''',
+    'src/main/java/com/tienda/modelo/Producto.java': '''\
+package com.tienda.modelo;
+
+public class Producto {
+    private String clave;
+    private double precio;
+    public double getPrecio() { return precio; }
+}
+''',
+    'src/main/java/com/tienda/servicio/RepositorioPedidos.java': '''\
+package com.tienda.servicio;
+
+import com.tienda.modelo.Pedido;
+import java.util.List;
+
+public interface RepositorioPedidos {
+    void guardar(Pedido pedido);
+    List<Pedido> todos();
+}
+''',
+    'src/main/java/com/tienda/servicio/ServicioPedidos.java': '''\
+package com.tienda.servicio;
+
+import com.tienda.modelo.*;
+import java.util.Map;
+import java.util.HashMap;
+
+public class ServicioPedidos {
+    private final Map<Integer, Pedido> pedidos = new HashMap<>();
+    private RepositorioPedidos repositorio;
+
+    public Pedido crearPedido(Cliente cliente) { return new Pedido(); }
+    public Pedido buscar(int folio) { return pedidos.get(folio); }
+}
+''',
+    'src/test/java/com/tienda/PedidoTest.java': '''\
+package com.tienda;
+public class PedidoTest { private int x; }
+''',
+}

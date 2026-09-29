@@ -58,7 +58,14 @@ def test_java(tmp_path):
     assert [a['nombre'] for a in p['atributos']] == ['url', 'puerto', 'items', 'conteo', 'otro', 'LLAVE']
     assert [a['tipo'] for a in p['atributos']][:4] == ['String', 'int', 'List<Item>', 'Map<String,int>']
     assert [m['nombre'] for m in p['metodos']] == ['calcularTotal', 'redondear', 'agregar']
-    assert p['metodos'][2]['parametros'] == [{'nombre': 'i', 'tipo': 'Item'}, {'nombre': 'extras', 'tipo': 'List<String>'}]
+    assert p['metodos'][2]['parametros'] == [{'nombre': 'i', 'tipo': 'Item', 'tipo_original': 'Item'},
+                                             {'nombre': 'extras', 'tipo': 'List<String>', 'tipo_original': 'String...'}]
+    # modificadores y tipos tal como estan escritos (para dibujar el programa fielmente)
+    assert p['metodos'][2]['abstracto'] and not p['metodos'][0]['abstracto'] and p['metodos'][0]['retorno_original'] == 'double'
+    llave = p['atributos'][5]
+    assert llave['estatico'] and llave['final'] and not p['atributos'][0]['estatico'] and p['atributos'][2]['final']
+    assert p['atributos'][3]['tipo_original'] == 'Map<String, Integer>'
+    assert r['PedidoRepo']['metodos'][0]['abstracto'] and not p['abstracta']
     assert p['superclases'] == ['Documento'] and p['interfaces'] == ['Comparable', 'Serializable'] and p['anotaciones'] == ['Entity']
     assert p['paquete'] == 'app.modelo'
     assert [a['nombre'] for a in r['Punto']['atributos']] == ['x', 'y']

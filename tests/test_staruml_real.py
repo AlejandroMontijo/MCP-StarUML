@@ -2,6 +2,7 @@
 #  - Auto-mensajes: StarUML abre y dibuja la secuencia generada con auto-mensajes.
 #  - Exportacion real: todos los diagramas del modelo real salen del CLI verdadero y svg_revisar lee el SVG autentico.
 #  - Estados y actividades: los diagramas hechos en StarUML (en pruebas/*.mdj) se leen completos con las reglas.
+#  - Programa a diagrama: StarUML abre y dibuja el diagrama de clases generado desde un programa Java.
 # Si existe la carpeta local pruebas/ (ignorada por git), los SVG, PNG e informes quedan en
 # pruebas/verificacion_staruml/ para revisarlos a ojo.
 import glob
@@ -12,7 +13,7 @@ import shutil
 import pytest
 
 import staruml_render as R
-from apoyo import LIFELINES, RAIZ, M, ok, tool
+from apoyo import LIFELINES, PROGRAMA_JAVA, RAIZ, M, fuentes, ok, tool
 
 
 def carpeta_revision():
@@ -147,3 +148,22 @@ def test_diagramas_de_estados_y_actividades_hechos_en_staruml():
             informe[f'{os.path.basename(p)} / {dg.get("name")}'] = r
     reglas = {os.path.basename(p): M.reglas_comportamiento(M.Doc(p)) for p in modelos}
     guardar_para_revision(informe={'lectura': informe, 'reglas': reglas}, nombre_informe='estados_y_actividades.json')
+
+
+def test_staruml_dibuja_el_diagrama_de_un_programa(tmp_path, staruml):
+    codigo = fuentes(str(tmp_path / 'tienda'), PROGRAMA_JAVA)
+    mdj = str(tmp_path / 'programa_tienda.mdj')
+    ok(tool('staruml_programa_a_diagrama', archivo=mdj, ruta_codigo=codigo))
+    svg = ok(tool('staruml_exportar', archivo=mdj, carpeta=str(tmp_path / 'svg'), diagrama='Diagrama de clases'))['archivos'][0]
+    texto = open(svg, encoding='utf-8').read()
+    for esperado in ('Persona', 'Cliente', 'Pedido', 'LineaPedido', 'EstadoPedido', 'NUEVO', 'Notificable',
+                     'RepositorioPedidos', 'calcularTotal', 'pedidos'):
+        assert esperado in texto, f'StarUML no dibujo "{esperado}"'
+    rev = ok(tool('svg_revisar', svg=svg, archivo=mdj, diagrama='Diagrama de clases'))
+    archivos = [svg, mdj]
+    if M.chrome_bin():
+        png = str(tmp_path / 'programa_tienda.png')
+        R.recortar(svg, salida=png)
+        archivos.append(png)
+    guardar_para_revision(*archivos, informe=rev, nombre_informe='programa_svg_revisar.json')
+    assert not [p for p in rev['problemas'] if p.startswith('LINEA CRUZA CAJA')], rev['problemas']

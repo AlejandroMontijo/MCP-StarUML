@@ -6,15 +6,18 @@ import json
 import logging
 import math
 import os
+import shutil
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import staruml_mdj as M          # noqa: E402
 import staruml_render as R       # noqa: E402
 import staruml_compare as C      # noqa: E402
+import staruml_programa as P     # noqa: E402
 
-VERSION = '2.0.0'
+VERSION = '2.1.0'
 PROTOCOLOS = ('2025-06-18', '2025-03-26', '2024-11-05')
 AQUI = os.path.dirname(os.path.abspath(__file__))
 NIVELES_LOG = ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
@@ -298,6 +301,61 @@ def t_codigo_a_diagrama(a):
     info = C.importar_codigo_a_diagrama(doc, a['ruta_codigo'], a['paquete'], a.get('diagrama'), a.get('lenguaje', 'auto'),
                                         a.get('modo') or 'agregar', a.get('metodos', True) is not False)
     return escribir(doc, a, info)
+
+
+@tool('staruml_programa_a_diagrama', 'Dibuja el diagrama de clases de un programa ya hecho (Java por defecto; tambien Python, '
+      'TypeScript/JavaScript, C#, Kotlin y Go). Crea un paquete con los paquetes del programa y sus clases, interfaces y '
+      'enumeraciones, con atributos y metodos (visibilidad, static, abstract), herencia, interfaces implementadas y las '
+      'asociaciones que salen de los campos (rol y multiplicidad; una sola asociacion navegable en ambos sentidos cuando '
+      'las dos clases se referencian). Acomoda las cajas por niveles (la clase base arriba) sin encimarlas y rutea las '
+      'lineas por los canales libres para que no crucen otras cajas. Si el .mdj no existe, lo crea.',
+      obj({'archivo': S(description='Proyecto .mdj donde se dibuja; si no existe se crea uno nuevo'),
+           'ruta_codigo': S(description='Carpeta (o archivo) del programa'),
+           'lenguaje': S(enum=['java', 'auto', 'python', 'typescript', 'csharp', 'kotlin', 'go'],
+                         description='Lenguaje del programa (default java)'),
+           'paquete': S(description='Nombre del paquete del modelo donde se crea todo (default: nombre de la carpeta)'),
+           'diagrama': S(description='Nombre del diagrama (default "Diagrama de clases")'),
+           'diagrama_por': S(enum=['programa', 'paquete'],
+                             description='programa (default): un diagrama con todo; paquete: uno por paquete del programa, '
+                                         'recomendado para programas grandes'),
+           'atributos': B(description='Mostrar atributos (default true)'),
+           'metodos': B(description='Mostrar metodos (default true)'),
+           'solo_publicos': B(description='Solo atributos y metodos publicos (default false)'),
+           'omitir_accesores': B(description='Ocultar getters y setters de los campos (default false)'),
+           'asociaciones': B(description='Los campos cuyo tipo es otra clase del programa se dibujan como asociaciones '
+                                         '(default true); con false quedan como atributos'),
+           'dependencias': B(description='Dependencias por los tipos de parametros y retornos (default false)'),
+           'incluir_pruebas': B(description='Incluir carpetas y clases de pruebas (default false)'),
+           'reemplazar': B(description='Si el paquete ya existe, borrarlo y rehacerlo (default false)'),
+           'salida': SALIDA, 'forzar': FORZAR},
+          ['archivo', 'ruta_codigo']), rw('Programa a diagrama', destructive=True))
+def t_programa_a_diagrama(a):
+    archivo = a['archivo']
+    nuevo = not os.path.exists(archivo)
+    tmp = None
+    try:
+        if nuevo:
+            if not archivo.lower().endswith('.mdj'):
+                raise M.MdjError(f'"archivo" debe terminar en .mdj: {archivo}')
+            tmp = tempfile.mkdtemp(prefix='staruml_mcp_nuevo_')
+            base = os.path.join(tmp, 'nuevo.mdj')
+            with open(base, 'w', encoding='utf-8', newline='\n') as f:
+                json.dump(P.proyecto_nuevo(os.path.splitext(os.path.basename(archivo))[0]), f, ensure_ascii=False, indent='\t')
+            doc = M.Doc(base)
+        else:
+            doc = M.Doc(archivo)
+        opciones = {k: a[k] for k in ('lenguaje', 'paquete', 'diagrama', 'diagrama_por') if a.get(k)}
+        opciones.update({k: a[k] is not False for k in ('atributos', 'metodos', 'asociaciones') if k in a})
+        opciones.update({k: bool(a[k]) for k in ('solo_publicos', 'omitir_accesores', 'dependencias', 'incluir_pruebas',
+                                                  'reemplazar') if k in a})
+        info = P.programa_a_diagrama(doc, a['ruta_codigo'], por_defecto=nuevo, **opciones)
+        info['archivo_nuevo'] = nuevo
+        if sum(d['cajas'] for d in info['diagramas']) > 60 and (a.get('diagrama_por') or 'programa') == 'programa':
+            info['aviso'] = 'El programa es grande para un solo diagrama; con diagrama_por="paquete" queda uno por paquete.'
+        return escribir(doc, dict(a, salida=a.get('salida') or archivo) if nuevo else a, info)
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------

@@ -418,7 +418,8 @@ def _params_jc(texto: str):
         p = _dividir(p, '=')[0] if '=' in p else p
         m = re.match(r'(.+?)\s*(\.\.\.)?\s+([^\W\d][\w$]*)$', p.strip())
         if m:
-            res.append({'nombre': m.group(3), 'tipo': _normalizar_tipo(m.group(1) + ('[]' if m.group(2) else ''))})
+            res.append({'nombre': m.group(3), 'tipo': _normalizar_tipo(m.group(1) + ('[]' if m.group(2) else '')),
+                        'tipo_original': m.group(1).strip() + ('...' if m.group(2) else '')})
     return res
 
 
@@ -531,8 +532,11 @@ def _miembros_jc(cuerpo: str, nombre: str, lang: str, tipo_decl: str):
                 if nom != nombre:
                     continue  # llamada suelta o algo que no es declaracion
                 continue  # constructor: no es un metodo del modelo
-            metodos.append({'nombre': nom, 'retorno': _normalizar_tipo(ret), 'parametros': _params_jc(m.group(3)),
-                            'visibilidad': _visibilidad(mods, 'public' if tipo_decl == 'interface' else 'package')})
+            abstracto = 'abstract' in mods or (tipo_decl == 'interface' and term == ';' and not {'default', 'static'} & set(mods))
+            metodos.append({'nombre': nom, 'retorno': _normalizar_tipo(ret), 'retorno_original': ret,
+                            'parametros': _params_jc(m.group(3)),
+                            'visibilidad': _visibilidad(mods, 'public' if tipo_decl == 'interface' else 'package'),
+                            'estatico': 'static' in mods, 'abstracto': abstracto})
             continue
         if lang == 'java' and term == '{}' and '(' not in izq:
             continue  # bloque de inicializacion o constructor compacto de record
@@ -548,7 +552,8 @@ def _miembros_jc(cuerpo: str, nombre: str, lang: str, tipo_decl: str):
         nombres = [m.group(2)] + [re.match(r'\s*([^\W\d][\w$]*)', p).group(1) for p in partes[1:] if re.match(r'\s*[^\W\d][\w$]*', p)]
         for n in nombres:
             atributos.append({'nombre': n, 'tipo': _normalizar_tipo(tipo), 'tipo_original': tipo,
-                              'visibilidad': _visibilidad(mods, 'private' if lang == 'csharp' else 'package')})
+                              'visibilidad': _visibilidad(mods, 'private' if lang == 'csharp' else 'package'),
+                              'estatico': 'static' in mods or 'const' in mods, 'final': bool({'final', 'readonly', 'const'} & set(mods))})
     return atributos, metodos, literales
 
 
@@ -625,6 +630,7 @@ def _parse_c(code: str, ruta: str, lang: str) -> Dict[str, Any]:
             cuerpo = ''
         previo = limpio[max(0, limpio.rfind('\n', 0, max(0, m.start() - 200))):m.start()]
         anotaciones = re.findall(r'@([\w$]+)', previo.split(';')[-1].split('}')[-1])
+        abstracta = tipo_decl == 'class' and bool(re.search(r'\babstract\b', re.split(r'[;{}]', previo)[-1]))
         if lang == 'typescript':
             atributos, metodos, literales = _miembros_ts(cuerpo, tipo_decl)
         else:
@@ -633,7 +639,7 @@ def _parse_c(code: str, ruta: str, lang: str) -> Dict[str, Any]:
             atributos = [{'nombre': p['nombre'], 'tipo': p['tipo'], 'tipo_original': p['tipo'], 'visibilidad': 'public'}
                          for p in _params_jc(componentes)] + atributos
         clases[nombre] = {'nombre': nombre, 'paquete': paquete, 'tipo_decl': tipo_decl, 'archivo': ruta, 'lenguaje': lang,
-                          'anotaciones': anotaciones, 'superclases': superclases, 'interfaces': interfaces,
+                          'abstracta': abstracta, 'anotaciones': anotaciones, 'superclases': superclases, 'interfaces': interfaces,
                           'atributos': atributos, 'metodos': metodos, 'literales': literales,
                           'llamadas': _llamadas_c(cuerpo)}
     return clases

@@ -120,6 +120,21 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
 - `staruml_diagrama_a_codigo`: genera esqueletos limpios y tipados (Java, Python,
   TypeScript, C#) respetando el estándar del lenguaje: getters y setters en Java,
   dataclasses en Python, propiedades automáticas en PascalCase y `namespace` en C#.
+- `staruml_programa_a_diagrama`: dibuja el diagrama de clases de un programa ya hecho.
+  - Modelo: un paquete del programa con sus paquetes (anidados como en Java), clases,
+    interfaces, enumeraciones y records; atributos y métodos con visibilidad, `static` y
+    `abstract`; tipos del programa como referencias y los demás como se escribieron.
+  - Relaciones: `extends` es generalización, `implements` es realización de interfaz y cada
+    campo de instancia cuyo tipo es otra clase del programa es una asociación con el campo
+    como rol (colecciones y `Map` con `0..*`, un solo objeto con `1`). Si dos clases se
+    referencian una a otra con un campo cada una, queda una sola asociación navegable en
+    ambos sentidos. Las constantes `static` quedan como atributos. Con `dependencias`, los
+    tipos de parámetros y retornos que no estén ya relacionados dan dependencias.
+  - Acomodo: la clase base arriba de sus derivadas y el dueño del campo arriba de la clase
+    referida (mientras no alargue el diagrama de más); filas de hasta 7 cajas; cada línea
+    que salta filas pasa por un hueco reservado y corre por el canal libre entre filas, así
+    que ninguna cruza una caja. El resultado reporta `lineas_que_cruzan_cajas` (vacío).
+  - El diagrama coincide al 100 % con el programa en `staruml_comparar_codigo`.
 - `staruml_codigo_a_diagrama`: extrae clases desde código existente y las incorpora al
   paquete del `.mdj` con su correspondiente vista.
 
