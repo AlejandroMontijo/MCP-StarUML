@@ -13,7 +13,7 @@ import staruml_mdj as M          # noqa: E402
 import staruml_render as R       # noqa: E402
 import staruml_compare as C      # noqa: E402
 
-VERSION = '1.0.0'
+VERSION = '2.0.0'
 PROTOCOLOS = ('2025-06-18', '2025-03-26', '2024-11-05')
 AQUI = os.path.dirname(os.path.abspath(__file__))
 
@@ -57,6 +57,39 @@ def tool(name, desc, schema, ann):
     return deco
 
 
+CLAVES_RUTA = ('archivo', 'archivo_a', 'archivo_b', 'svg', 'salida', 'carpeta', 'carpeta_salida', 'ruta_codigo')
+
+
+def _dentro(ruta, carpeta):
+    try:
+        return os.path.commonpath([ruta, carpeta]) == carpeta
+    except ValueError:  # otra unidad en Windows
+        return False
+
+
+def resolver_rutas(args):
+    """Rutas absolutas. Las relativas de salida, carpetas y codigo se toman desde la carpeta del .mdj (o del SVG), porque
+    el directorio de trabajo del servidor depende del cliente. Si STARUML_MCP_ALLOWED_DIRS esta definida (carpetas
+    separadas por os.pathsep), ninguna ruta puede quedar fuera de ellas."""
+    a = dict(args)
+    for k in ('archivo', 'archivo_a', 'archivo_b', 'svg'):
+        if isinstance(a.get(k), str) and a[k]:
+            a[k] = os.path.abspath(os.path.expanduser(a[k]))
+    base = next((os.path.dirname(a[k]) for k in ('archivo', 'svg') if isinstance(a.get(k), str) and a[k]), None)
+    for k in ('salida', 'carpeta', 'carpeta_salida', 'ruta_codigo'):
+        v = a.get(k)
+        if isinstance(v, str) and v:
+            v = os.path.expanduser(v)
+            a[k] = os.path.abspath(v if os.path.isabs(v) or base is None else os.path.join(base, v))
+    permitidas = [os.path.realpath(os.path.expanduser(d.strip()))
+                  for d in os.environ.get('STARUML_MCP_ALLOWED_DIRS', '').split(os.pathsep) if d.strip()]
+    if permitidas:
+        for k in CLAVES_RUTA:
+            if isinstance(a.get(k), str) and a[k] and not any(_dentro(os.path.realpath(a[k]), d) for d in permitidas):
+                raise M.MdjError(f'"{k}" queda fuera de las carpetas permitidas (STARUML_MCP_ALLOWED_DIRS): {a[k]}')
+    return a
+
+
 def escribir(doc, a, extra=None):
     bk = doc.save(a.get('salida'), backup=True, force=bool(a.get('forzar')))
     v = M.validar(doc, oose=False)
@@ -98,9 +131,11 @@ def t_resumen(a):
 @tool('mdj_modelo', 'Clases y actores con estereotipo, atributos, metodos y documentacion; asociaciones con '
       'multiplicidades, roles y navegabilidad; generalizaciones y dependencias. Se puede filtrar por texto o paquete.',
       obj({'archivo': ARCHIVO, 'filtro': S(description='Texto que debe aparecer en el nombre'),
-           'paquete': S(description='Nombre o id del paquete')}, ['archivo']), ro('Modelo'))
+           'paquete': S(description='Nombre o id del paquete'),
+           'limite': N(description='Maximo de elementos por lista (default 300); siguiente_desde indica si hay mas'),
+           'desde': N(description='Posicion inicial para paginar (default 0)')}, ['archivo']), ro('Modelo'))
 def t_modelo(a):
-    return M.modelo(M.Doc(a['archivo']), a.get('filtro'), a.get('paquete'))
+    return M.modelo(M.Doc(a['archivo']), a.get('filtro'), a.get('paquete'), int(a.get('limite') or 300), int(a.get('desde') or 0))
 
 
 @tool('mdj_secuencia', 'Mensajes numerados de un diagrama de secuencia (origen, destino, tipo de cada lado, reply) y el orden '
@@ -220,28 +255,31 @@ def t_comparar_codigo(a):
       obj({'archivo': ARCHIVO, 'diagrama': S(description='Nombre o id del diagrama de clases'),
            'lenguaje': S(enum=['java', 'python', 'typescript'], description='Lenguaje de destino (default java)'),
            'carpeta_salida': S(description='Carpeta donde se guardaran los archivos de codigo generados'),
-           'sobrescribir': B(description='Reemplazar los archivos que ya existan (default false: se omiten y se reportan)')},
+           'sobrescribir': B(description='Reemplazar los archivos que ya existan (default false: se omiten y se reportan)'),
+           'paquete_codigo': S(description='Paquete Java de los archivos generados (default "modelo"; vacio = sin paquete)')},
           ['archivo', 'diagrama']), rw('Generar codigo', destructive=True))
 def t_diagrama_a_codigo(a):
     doc = M.Doc(a['archivo'])
     return C.generar_codigo_desde_diagrama(doc, a['diagrama'], a.get('lenguaje', 'java'), a.get('carpeta_salida'),
-                                           bool(a.get('sobrescribir')))
+                                           bool(a.get('sobrescribir')), a.get('paquete_codigo', 'modelo'))
 
 
-@tool('staruml_codigo_a_diagrama', 'Importa clases, atributos y metodos desde archivos de codigo fuente (Java, Python, TS) '
-      'y los crea dentro de un paquete y diagrama de clases del .mdj.',
+@tool('staruml_codigo_a_diagrama', 'Importa clases e interfaces, atributos con su tipo y metodos desde codigo fuente (Java, '
+      'Python, TypeScript/JavaScript, C#) hacia un paquete del .mdj y, si se da diagrama, las dibuja sin encimarlas. '
+      'A boundary, control y entity no se les agregan metodos (analisis de robustez).',
       obj({'archivo': ARCHIVO, 'ruta_codigo': S(description='Carpeta o archivo de codigo fuente a importar'),
            'paquete': S(description='Nombre o id del paquete destino en el .mdj'),
            'diagrama': S(description='Opcional: nombre del diagrama de clases donde agregarlas visualmente'),
            'lenguaje': S(enum=['auto', 'java', 'python', 'typescript', 'csharp']),
-           'modo': S(enum=['agregar', 'sincronizar'], description='agregar (default): solo agrega los atributos que falten; '
-                                                                 'sincronizar: deja exactamente los del codigo y reporta los quitados'),
+           'modo': S(enum=['agregar', 'sincronizar'], description='agregar (default): solo agrega lo que falte; '
+                                                                 'sincronizar: deja exactamente lo del codigo y reporta lo quitado'),
+           'metodos': B(description='Importar tambien los metodos (default true)'),
            'salida': SALIDA, 'forzar': FORZAR},
           ['archivo', 'ruta_codigo', 'paquete']), rw('Importar codigo a diagrama', destructive=True))
 def t_codigo_a_diagrama(a):
     doc = M.Doc(a['archivo'])
     info = C.importar_codigo_a_diagrama(doc, a['ruta_codigo'], a['paquete'], a.get('diagrama'), a.get('lenguaje', 'auto'),
-                                        a.get('modo') or 'agregar')
+                                        a.get('modo') or 'agregar', a.get('metodos', True) is not False)
     return escribir(doc, a, info)
 
 
@@ -255,21 +293,23 @@ def t_respaldar(a):
     return {'respaldo': M.backup_file(os.path.abspath(os.path.expanduser(a['archivo'])), a.get('carpeta'))}
 
 
-@tool('mdj_clase_crear', 'Crea una clase en un paquete, con estereotipo (boundary, control, entity o ninguno), atributos '
-      '(solo para entity) y documentacion. Para dibujarla usa mdj_vista_agregar.',
-      obj({'archivo': ARCHIVO, 'paquete': S(), 'nombre': S(), 'estereotipo': S(enum=['boundary', 'control', 'entity', 'ninguno']),
+@tool('mdj_clase_crear', 'Crea una clase (estereotipo boundary, control, entity o ninguno) o un actor (estereotipo actor) '
+      'en un paquete, con atributos (no para boundary, control ni actores) y documentacion. Para dibujarla usa mdj_vista_agregar.',
+      obj({'archivo': ARCHIVO, 'paquete': S(), 'nombre': S(),
+           'estereotipo': S(enum=['boundary', 'control', 'entity', 'ninguno', 'actor']),
            'atributos': {'type': 'array', 'items': {'type': 'string'}}, 'documentacion': S(), 'salida': SALIDA, 'forzar': FORZAR},
           ['archivo', 'paquete', 'nombre']), rw('Crear clase'))
 def t_clase_crear(a):
     doc = M.Doc(a['archivo'])
     pk = doc.find(a['paquete'], types=('UMLPackage', 'UMLModel', 'UMLSubsystem'))
     est = a.get('estereotipo') or 'ninguno'
-    if est in ('boundary', 'control') and a.get('atributos'):
-        raise M.MdjError('Boundary y control van sin atributos')
-    c = {'_type': 'UMLClass', '_id': doc.new_id(), '_parent': M.ref(pk['_id']), 'name': a['nombre']}
+    if est in ('boundary', 'control', 'actor') and a.get('atributos'):
+        raise M.MdjError('Boundary, control y actores van sin atributos')
+    c = {'_type': 'UMLActor' if est == 'actor' else 'UMLClass', '_id': doc.new_id(), '_parent': M.ref(pk['_id']),
+         'name': a['nombre']}
     if a.get('documentacion'):
         c['documentation'] = a['documentacion']
-    if est != 'ninguno':
+    if est not in ('ninguno', 'actor'):
         c['stereotype'] = M.ref(doc.stereotype_id(est))
     pk.setdefault('ownedElements', []).append(c)
     doc.reindex()
@@ -278,20 +318,62 @@ def t_clase_crear(a):
     return escribir(doc, a, {'clase': c['_id']})
 
 
+@tool('mdj_paquete_crear', 'Crea un paquete dentro del modelo raiz (o dentro del modelo o paquete indicado).',
+      obj({'archivo': ARCHIVO, 'nombre': S(), 'dentro_de': S(description='Nombre o id del modelo o paquete padre (default: el modelo raiz)'),
+           'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'nombre']), rw('Crear paquete'))
+def t_paquete_crear(a):
+    doc = M.Doc(a['archivo'])
+    pk = M.crear_paquete(doc, a['nombre'], a.get('dentro_de'))
+    return escribir(doc, a, {'paquete': pk['_id']})
+
+
+@tool('mdj_diagrama_crear', 'Crea un diagrama vacio de clases, de casos de uso o de secuencia (este con su colaboracion, '
+      'interaccion y marco, como lo hace StarUML). Con por_defecto=true queda como el que abre StarUML.',
+      obj({'archivo': ARCHIVO, 'tipo': S(enum=['clases', 'casos_de_uso', 'secuencia']), 'nombre': S(),
+           'dentro_de': S(description='Nombre o id del modelo o paquete padre (default: el modelo raiz)'),
+           'por_defecto': B(description='Abrirlo por defecto al cargar el archivo'), 'salida': SALIDA, 'forzar': FORZAR},
+          ['archivo', 'tipo', 'nombre']), rw('Crear diagrama'))
+def t_diagrama_crear(a):
+    doc = M.Doc(a['archivo'])
+    dg = M.crear_diagrama(doc, a['tipo'], a['nombre'], a.get('dentro_de'), bool(a.get('por_defecto')))
+    return escribir(doc, a, {'diagrama': dg['_id'], 'tipo': dg['_type']})
+
+
 @tool('mdj_renombrar', 'Cambia el nombre de un elemento (id, nombre o Tipo:Nombre) y el texto de su nombre en todas sus vistas.',
       obj({'archivo': ARCHIVO, 'elemento': S(), 'nuevo_nombre': S(), 'salida': SALIDA, 'forzar': FORZAR},
           ['archivo', 'elemento', 'nuevo_nombre']), rw('Renombrar'))
 def t_renombrar(a):
     doc = M.Doc(a['archivo'])
     el = doc.find(a['elemento'])
-    viejo = el.get('name')
-    el['name'] = a['nuevo_nombre']
+    viejo, nuevo = el.get('name') or '', a['nuevo_nombre']
+    el['name'] = nuevo
     n = 0
-    for dg, v in doc.views_of(el['_id']):
+    for _, v in doc.views_of(el['_id']):
         lab = M._name_label(v)
-        if lab is not None and lab.get('text', '').endswith(viejo or ''):
-            lab['text'] = lab['text'][: len(lab['text']) - len(viejo or '')] + a['nuevo_nombre']; n += 1
-    return escribir(doc, a, {'antes': viejo, 'despues': a['nuevo_nombre'], 'vistas_actualizadas': n})
+        texto = lab.get('text', '') if lab is not None else None
+        if texto is None:
+            continue
+        if viejo and texto.endswith(viejo):
+            lab['text'] = texto[:len(texto) - len(viejo)] + nuevo
+        elif not viejo and texto.startswith(':'):  # lifeline sin nombre (": Tipo") -> "nombre: Tipo"
+            lab['text'] = nuevo + texto
+        elif not texto:
+            lab['text'] = nuevo
+        else:
+            continue
+        n += 1
+    # las lifelines que representan a esta clase muestran ": Nombre"
+    if viejo and el['_type'] in ('UMLClass', 'UMLActor', 'UMLInterface'):
+        roles = {o['_id'] for o in doc.ids.values() if o and o['_type'] == 'UMLAttribute'
+                 and isinstance(o.get('type'), dict) and o['type'].get('$ref') == el['_id']}
+        for o in [o for o in doc.ids.values() if o and o['_type'] == 'UMLLifeline']:
+            if isinstance(o.get('represent'), dict) and o['represent'].get('$ref') in roles:
+                for _, v in doc.views_of(o['_id']):
+                    lab = M._name_label(v)
+                    if lab is not None and lab.get('text', '').endswith(': ' + viejo):
+                        lab['text'] = lab['text'][:len(lab['text']) - len(viejo)] + nuevo
+                        n += 1
+    return escribir(doc, a, {'antes': viejo, 'despues': nuevo, 'vistas_actualizadas': n})
 
 
 @tool('mdj_documentacion', 'Pone el texto de Documentation de un elemento (responsabilidad de la clase, por ejemplo).',
@@ -415,7 +497,8 @@ def t_vista_mover(a):
 def t_linea_ruta(a):
     doc = M.Doc(a['archivo'])
     dg = doc.diagram(a['diagrama'])
-    v = [x for x in dg['ownedViews'] if x['_id'] == a['linea'] or x.get('model', {}).get('$ref') == a['linea']]
+    v = [x for x in dg.get('ownedViews', []) if x['_id'] == a['linea']
+         or (isinstance(x.get('model'), dict) and x['model'].get('$ref') == a['linea'])]
     if not v:
         raise M.MdjError('No encontre esa linea en el diagrama')
     pts = M.linea_ruta(doc, dg, v[0], a.get('puntos') or ())
@@ -469,8 +552,9 @@ def t_nota(a):
 def t_sec_generar(a):
     doc = M.Doc(a['archivo'])
     info = M.generar_secuencia(doc, a['diagrama'], a['lifelines'], a['mensajes'], a.get('opciones'))
+    oose = M.reglas_oose(doc)  # antes de guardar: si fallara, no debe quedar un archivo escrito con respuesta de error
     res = escribir(doc, a, info)
-    res['oose'] = M.reglas_oose(doc)
+    res['oose'] = oose
     return res
 
 
@@ -530,14 +614,58 @@ def send(msg):
     sys.stdout.flush()
 
 
-def handle(msg):
-    mid = msg.get('id')
-    method = msg.get('method')
-    if method is None:
-        return  # respuesta a algo que no pedimos
+def _error(mid, code, message):
+    return {'jsonrpc': '2.0', 'id': mid, 'error': {'code': code, 'message': message}}
+
+
+def _texto_json(out):
+    text = json.dumps(out, ensure_ascii=False, indent=1)
+    # respuestas grandes en JSON compacto: la sangria las infla ~40 % y se comen el contexto del asistente
+    return text if len(text) <= 20000 else json.dumps(out, ensure_ascii=False, separators=(',', ':'))
+
+
+def llamar_herramienta(p):
+    """Resultado MCP de tools/call. None si la herramienta no existe (lo reporta handle como error JSON-RPC)."""
+    t = next((t for t in TOOLS if t['name'] == p.get('name')), None)
+    if t is None:
+        return None
+    args = p.get('arguments') or {}
+    problema = revisar_args(t['inputSchema'], args)
+    if problema:
+        return {'content': [{'type': 'text', 'text': f'Error: {problema}'}], 'isError': True}
     try:
+        out = t['fn'](resolver_rutas(args))
+        if isinstance(out, dict) and '__content__' in out:
+            return {'content': out['__content__'], 'isError': False}
+        text = out if isinstance(out, str) else _texto_json(out)
+        return {'content': [{'type': 'text', 'text': text}], 'isError': False}
+    except M.MdjError as e:
+        return {'content': [{'type': 'text', 'text': f'Error: {e}'}], 'isError': True}
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        return {'content': [{'type': 'text', 'text': f'Error inesperado: {type(e).__name__}: {e}'}], 'isError': True}
+
+
+def handle(msg):
+    """Procesa un mensaje JSON-RPC y devuelve la respuesta, o None cuando no corresponde responder
+    (notificaciones, que no traen "id", y respuestas a algo que no pedimos)."""
+    if not isinstance(msg, dict):
+        return _error(None, -32600, 'Solicitud invalida: se esperaba un objeto')
+    notificacion = 'id' not in msg
+    mid = msg.get('id')
+    if 'method' not in msg:
+        if 'result' in msg or 'error' in msg:
+            return None
+        return None if notificacion else _error(mid, -32600, 'Solicitud invalida: falta "method"')
+    method = msg['method']
+    if not isinstance(method, str):
+        return None if notificacion else _error(mid, -32600, 'Solicitud invalida: "method" debe ser texto')
+    try:
+        params = msg.get('params') or {}
+        if not isinstance(params, dict):
+            return None if notificacion else _error(mid, -32602, '"params" debe ser un objeto')
         if method == 'initialize':
-            pv = (msg.get('params') or {}).get('protocolVersion')
+            pv = params.get('protocolVersion')
             result = {'protocolVersion': pv if pv in PROTOCOLOS else PROTOCOLOS[0],
                       'capabilities': {'tools': {'listChanged': False}},
                       'serverInfo': {'name': 'staruml', 'title': 'StarUML (.mdj)', 'version': VERSION},
@@ -547,43 +675,19 @@ def handle(msg):
         elif method == 'tools/list':
             result = {'tools': [{k: t[k] for k in ('name', 'description', 'inputSchema', 'annotations')} for t in TOOLS]}
         elif method == 'tools/call':
-            p = msg.get('params') or {}
-            t = next((t for t in TOOLS if t['name'] == p.get('name')), None)
-            if t is None:
-                if mid is not None:
-                    send({'jsonrpc': '2.0', 'id': mid, 'error': {'code': -32602, 'message': f'Herramienta desconocida: {p.get("name")}'}})
-                return
-            args = p.get('arguments') or {}
-            problema = revisar_args(t['inputSchema'], args)
-            if problema:
-                send({'jsonrpc': '2.0', 'id': mid, 'result': {'content': [{'type': 'text', 'text': f'Error: {problema}'}], 'isError': True}})
-                return
-            try:
-                out = t['fn'](args)
-                if isinstance(out, dict) and '__content__' in out:
-                    result = {'content': out['__content__'], 'isError': False}
-                else:
-                    text = out if isinstance(out, str) else json.dumps(out, ensure_ascii=False, indent=1)
-                    result = {'content': [{'type': 'text', 'text': text}], 'isError': False}
-            except M.MdjError as e:
-                result = {'content': [{'type': 'text', 'text': f'Error: {e}'}], 'isError': True}
-            except Exception as e:
-                traceback.print_exc(file=sys.stderr)
-                result = {'content': [{'type': 'text', 'text': f'Error inesperado: {type(e).__name__}: {e}'}], 'isError': True}
+            result = llamar_herramienta(params)
+            if result is None:
+                return None if notificacion else _error(mid, -32602, f'Herramienta desconocida: {params.get("name")}')
         elif method.startswith('notifications/'):
-            return
+            return None
         elif method in ('resources/list', 'prompts/list'):
             result = {'resources': []} if method == 'resources/list' else {'prompts': []}
         else:
-            if mid is not None:
-                send({'jsonrpc': '2.0', 'id': mid, 'error': {'code': -32601, 'message': f'Metodo no soportado: {method}'}})
-            return
-        if mid is not None:
-            send({'jsonrpc': '2.0', 'id': mid, 'result': result})
+            return None if notificacion else _error(mid, -32601, f'Metodo no soportado: {method}')
+        return None if notificacion else {'jsonrpc': '2.0', 'id': mid, 'result': result}
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
-        if mid is not None:
-            send({'jsonrpc': '2.0', 'id': mid, 'error': {'code': -32603, 'message': str(e)}})
+        return None if notificacion else _error(mid, -32603, str(e))
 
 
 def _constante_no_json(c):
@@ -606,9 +710,17 @@ def main():
         except ValueError:
             send({'jsonrpc': '2.0', 'id': None, 'error': {'code': -32700, 'message': 'JSON invalido'}})
             continue
-        for m in (msg if isinstance(msg, list) else [msg]):
-            if isinstance(m, dict):
-                handle(m)
+        if isinstance(msg, list):  # lote JSON-RPC: una sola respuesta con el arreglo de respuestas
+            if not msg:
+                send(_error(None, -32600, 'Solicitud invalida: lote vacio'))
+                continue
+            respuestas = [r for r in (handle(m) for m in msg) if r is not None]
+            if respuestas:
+                send(respuestas)
+        else:
+            r = handle(msg)
+            if r is not None:
+                send(r)
 
 
 if __name__ == '__main__':

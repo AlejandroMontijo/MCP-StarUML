@@ -9,7 +9,9 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
   que como lo guarda StarUML.
 - Antes de escribir se hace un respaldo (carpeta `respaldos/` del MCP, o la que diga
   `STARUML_MCP_BACKUP_DIR`) y se compara byte por byte con el original.
-- **Si la aplicación de StarUML está abierta, no se escribe.** Si tiene cargada una
+- Antes de escribir se valida el modelo en memoria: si el cambio dejaría ids duplicados,
+  referencias colgantes, `_parent` incoherentes o números NaN/infinito, no se escribe nada.
+- **Si la aplicación de StarUML está abierta (o no se puede comprobar), no se escribe.** Si tiene cargada una
   versión vieja y alguien guarda desde ahí, pisa los cambios. Se pide cerrarla (sin
   guardar) o se usa `forzar` solo si se sabe que no tiene ese archivo abierto.
 - Para probar un cambio sin tocar el original, las herramientas de edición aceptan
@@ -44,7 +46,8 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
 - Control -> actor no es válido: se pone una boundary en medio.
 - Una boundary no habla con otra boundary ni con una entity.
 - Boundary y control sin atributos ni métodos. En análisis ninguna clase lleva métodos.
-- Una sola notación (la de íconos) en todo el proyecto.
+- Una sola notación (la de íconos) en todo el proyecto. `mdj_validar` avisa de las vistas de
+  robustez que no la usan, de los estereotipos guardados como texto y de las cajas encimadas.
 
 ## Diagramas de secuencia
 
@@ -69,7 +72,8 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
 ## Exportar y revisar
  
 - `staruml_exportar` usa el CLI (`StarUML image ... -f svg -s selector`) con límite de
-  tiempo. Diagramas con el mismo nombre se sobrescriben entre sí al exportar todos.
+  tiempo. Diagramas con el mismo nombre se sobrescriben entre sí al exportar todos; al
+  exportar uno solo (por nombre o id) se resuelve la ambigüedad automáticamente.
 - `svg_recortar` usa Chrome headless con un perfil propio y lo cierra al terminar;
   funciona con rutas con espacios.
 - `staruml_ver_visual` genera una imagen PNG optimizada (1600 px máx.) y la devuelve

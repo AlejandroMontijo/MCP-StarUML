@@ -20,18 +20,21 @@ El repositorio Git en `main` contiene exclusivamente el código fuente oficial y
 
 ```text
 MCP StarUML/
-├── server.py              # Servidor MCP central (30 herramientas registradas)
+├── server.py              # Servidor MCP central (32 herramientas registradas)
 ├── staruml_mdj.py         # Motor de lectura, manipulación JSON, validación y edición segura
 ├── staruml_render.py      # Exportación CLI de StarUML, revisión de SVG y recorte a PNG (Chrome)
 ├── staruml_compare.py     # Comparador de diagramas vs código y generador bidireccional
 ├── reglas.md              # Convenciones de modelado, OOSE, secuencias y arquitectura
 ├── README.md              # Documentación genérica y profesional para open source
 ├── CLAUDE.md              # Este archivo de memoria y contexto para Claude Code
+├── PLAN_DE_MEJORA.md      # Hallazgos de la campaña de pruebas y estado del plan de mejora
+├── tests/                 # Suite pytest versionada (solo modelos .mdj sintéticos, genéricos)
+├── .github/workflows/     # CI: pytest en macOS, Linux y Windows (Python 3.9 y 3.12)
 └── .gitignore             # Configuración de exclusión (ignora pruebas/, scratch/, respaldos/)
 ```
 
 > **Nota sobre `pruebas/`:**
-> La carpeta `pruebas/` existe **únicamente en local** y está estrictamente desindexada e ignorada en Git. Contiene los scripts de prueba (`probar_todo.py`, `probar_visual_y_codigo.py`, `probar_servidor.py`, `probar_reconstruccion_completa.py`) y el modelo reconstruido `proyecto_reconstruido.mdj`. **NUNCA debe ser comiteada ni pusheada al repositorio remoto.**
+> La carpeta `pruebas/` existe **únicamente en local** y está estrictamente desindexada e ignorada en Git. La suite versionada `tests/` usa automáticamente el primer `pruebas/*.mdj` (o `STARUML_MCP_MODELO_REAL`) como modelo real en `tests/test_modelo_real.py`, siempre sobre copias; en GitHub esas pruebas se omiten. Contiene los scripts de prueba (`probar_todo.py`, `probar_visual_y_codigo.py`, `probar_servidor.py`, `probar_reconstruccion_completa.py`) y el modelo reconstruido `proyecto_reconstruido.mdj`. **NUNCA debe ser comiteada ni pusheada al repositorio remoto.**
 
 ---
 
@@ -65,11 +68,20 @@ MCP StarUML/
 
 ---
 
+## 3b. Campaña de pruebas y plan de mejora (2026-09-29)
+
+- `PLAN_DE_MEJORA.md` documenta 56 bugs confirmados y su corrección; `tests/` los cubre con regresiones.
+- El guardado es transaccional: `Doc.save()` rechaza un cambio que agregue ids duplicados, referencias colgantes, `_parent` incoherente o NaN.
+- Nada se pierde en silencio: el importador de código es aditivo por defecto (`modo: "sincronizar"` explícito), el generador no sobrescribe sin `sobrescribir: true` y la regeneración de secuencias conserva las notas.
+- La detección de "StarUML abierto" cubre macOS, Linux y Windows y bloquea si no puede verificar (`forzar: true` para omitirla).
+- Render portable: StarUML y Chrome se buscan en rutas típicas, `PATH` y `STARUML_MCP_STARUML_BIN` / `STARUML_MCP_CHROME_BIN`; sin `sips` ni `perl`.
+
 ## 4. Convenciones y Reglas Inquebrantables
 
 1. **Reglas de Git:**
    - Mensajes de commit claros, concisos y sin mencionar herramientas externas no relacionadas.
-   - Mantener `pruebas/` fuera del control de versiones.
+   - **Claude no figura como autor ni coautor:** nada de líneas `Co-Authored-By` ni `Claude-Session` en los commits; el autor es el dueño del repositorio.
+   - Mantener `pruebas/` fuera del control de versiones. `tests/` sí se versiona, pero solo con modelos sintéticos y genéricos.
 2. **Seguridad en `.mdj`:**
    - Antes de escribir en un `.mdj`, verificar que StarUML no esté corriendo con ese archivo abierto para evitar que sobreescriba cambios (usar `forzar: true` solo si se sabe seguro).
    - Siempre respaldar antes de guardar (`doc.save(backup=True)`).
@@ -89,6 +101,9 @@ MCP StarUML/
 Para verificar el correcto funcionamiento del servidor y herramientas en local:
 
 ```bash
+# 0. Suite versionada completa (protocolo, integridad, edición, código, render, plataforma y modelo real si está en pruebas/)
+python3 -m pytest tests -q
+
 # 1. Probar suite completa del servidor (41 pruebas de integridad, OOSE, lectura, escritura y CLI)
 python3 pruebas/probar_todo.py pruebas/proyecto_reconstruido.mdj cu_1 cu_1_FB
 

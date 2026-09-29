@@ -2,7 +2,7 @@
 
 > Resultado de una campaña de pruebas en busca de bugs sobre `main` (commit `6c118c2`, 2026-09-29) y de la revisión del plan v2.0 propuesto anteriormente. **Cada hallazgo de este documento se reprodujo**; ninguno es especulativo.
 
-> **Estado:** ✅ Fase 0 completada. Los 11 críticos ya no se reproducen, y de paso se corrigieron B05, B18 y P06 (detalle en §5). Quedan pendientes las Fases 1–3.
+> **Estado:** ✅ Fases 0, 1 y 2 completadas, y la Fase 3 en parte. Los 56 bugs están corregidos y cubiertos por la suite `tests/` (119 pruebas en verde en Python 3.9 y 3.11), que además se ejecuta sobre el caso de uso real del equipo cuando está en `pruebas/`. Ver §9.
 
 ---
 
@@ -197,25 +197,25 @@ Incorpora los puntos 1.1–1.4 del plan v2.0, ajustados.
 
 | # | Tarea | Cierra |
 |---|---|---|
-| 1.1 | **Suite pytest versionada**: fixture generada por código, los 56 casos de este informe como regresión, un invariante de integridad tras cada herramienta de escritura, el fuzzer con semilla fija (unas 200 operaciones) y pruebas del protocolo por stdio. Criterio: `pytest -q` corre en menos de 30 s sin StarUML ni Chrome. | — |
-| 1.2 | **CI en GitHub Actions**: matriz Ubuntu/macOS/Windows × Python 3.9/3.12, con `ruff check --select F,B` como gate. Con la matriz de Windows se habrían detectado P05 y P06 desde el principio. | — |
-| 1.3 | **Datos mínimos pero válidos no deben tumbar herramientas**: `.get('ownedViews', [])` en todos los accesos; resolver los tipos `{"$ref"}` al nombre de la clase; `o.get('name')` en `reglas_oose`; ejecutar `reglas_oose` antes de guardar; convertir el JSON inválido en `MdjError`; validar las `opciones`. | B04–B07, B13–B15, C02 |
-| 1.4 | **Render portable**: `shutil.which`, rutas de Windows/Linux y las variables `STARUML_MCP_STARUML_BIN`/`STARUML_MCP_CHROME_BIN`. Redimensionar sin `sips` (tamaño de ventana y factor de escala de Chrome). Usar `pkill` solo donde exista. | P03, P04 |
-| 1.5 | **Caché de renders correcta**: la clave debe ser hash(ruta absoluta del `.mdj` + id del diagrama + mtime), sin fallback al "SVG más reciente", y `ver_visual` debe pasar el **id** a `exportar`. | P07–P09 |
-| 1.6 | **Configuración y logging** (v2.0 §1.2–1.3): timeouts, binarios, rotación de respaldos con `STARUML_MCP_BACKUP_KEEP` y nivel de log validado. | respaldos |
-| 1.7 | **Sandbox de rutas** (v2.0 §1.4, corregido). Las rutas relativas se resuelven contra la carpeta del `.mdj`. | B16 |
-| 1.8 | **Protocolo y tamaño de respuesta**: batch según la versión negociada, `-32600` para solicitudes inválidas y ninguna respuesta a notificaciones. JSON compacto, y paginación (`limite`, `desde`) en `mdj_modelo`, `mdj_buscar` y `mdj_geometria`. | J01–J03 |
+| 1.1 ✅ | **Suite pytest versionada**: fixture generada por código, los 56 casos de este informe como regresión, un invariante de integridad tras cada herramienta de escritura, el fuzzer con semilla fija (unas 200 operaciones) y pruebas del protocolo por stdio. Criterio: `pytest -q` corre en menos de 30 s sin StarUML ni Chrome. | — |
+| 1.2 ✅ | **CI en GitHub Actions**: matriz Ubuntu/macOS/Windows × Python 3.9/3.12, con `ruff check --select F,B` como gate. Con la matriz de Windows se habrían detectado P05 y P06 desde el principio. | — |
+| 1.3 ✅ | **Datos mínimos pero válidos no deben tumbar herramientas**: `.get('ownedViews', [])` en todos los accesos; resolver los tipos `{"$ref"}` al nombre de la clase; `o.get('name')` en `reglas_oose`; ejecutar `reglas_oose` antes de guardar; convertir el JSON inválido en `MdjError`; validar las `opciones`. | B04–B07, B13–B15, C02 |
+| 1.4 ✅ | **Render portable**: `shutil.which`, rutas de Windows/Linux y las variables `STARUML_MCP_STARUML_BIN`/`STARUML_MCP_CHROME_BIN`. Redimensionar sin `sips` (tamaño de ventana y factor de escala de Chrome). Usar `pkill` solo donde exista. | P03, P04 |
+| 1.5 ✅ | **Caché de renders correcta**: la clave debe ser hash(ruta absoluta del `.mdj` + id del diagrama + mtime), sin fallback al "SVG más reciente", y `ver_visual` debe pasar el **id** a `exportar`. | P07–P09 |
+| 1.6 ◐ | **Configuración y logging** (v2.0 §1.2–1.3): timeouts, binarios, rotación de respaldos con `STARUML_MCP_BACKUP_KEEP` y nivel de log validado. | respaldos |
+| 1.7 ✅ | **Sandbox de rutas** (v2.0 §1.4, corregido). Las rutas relativas se resuelven contra la carpeta del `.mdj`. | B16 |
+| 1.8 ✅ | **Protocolo y tamaño de respuesta**: batch según la versión negociada, `-32600` para solicitudes inválidas y ninguna respuesta a notificaciones. JSON compacto, y paginación (`limite`, `desde`) en `mdj_modelo`, `mdj_buscar` y `mdj_geometria`. | J01–J03 |
 
 ### Fase 2: sincronización con código confiable (3–4 sesiones)
 
 | # | Tarea | Cierra |
 |---|---|---|
-| 2.1 | **Parsers nuevos**: Python con `ast` (biblioteca estándar, sin dependencias nuevas). Java, C# y TS con un tokenizador que respete strings y comentarios, extrayendo miembros solo a profundidad 1 de llaves. Cabeceras con genéricos, bases con `:` en C#, `record`, propiedades C#, `readonly`/`static`/`async`/`?` en TS y métodos de interfaz. | C11–C16, C18 |
-| 2.2 | **Escaneo**: filtrar extensiones según `lenguaje`, incluir `.js`/`.jsx`/`.mjs` y podar `dirs[:]` (`.venv`, `venv`, `dist`, `obj`, `bin`, `out`, `.tox`). | C17 |
-| 2.3 | **Normalización**: conservar las mayúsculas del tipo genérico y distinguir `Set`/`Map` de `List`; normalizar acentos con `unicodedata` al emparejar nombres. | C01, C22 |
-| 2.4 | **Métricas honestas**: excluir replies y mensajes a actores del denominador; no exigir actores como clases; verificar colección vs. escalar según la multiplicidad; respetar la navegabilidad (`== 'navigable'`, en ambos extremos); usar `llamadas` para verificar el flujo emisor→receptor. | C10, C19–C21 |
-| 2.5 | **Generadores que compilan**: identificadores válidos (sin espacios ni acentos), roles sin la "s" duplicada, `extends`/`implements`, paquete configurable, TS con métodos y asociaciones, y devolver el código cuando no hay `carpeta_salida`. Criterio: `javac`, `tsc --strict` e `import` de Python pasan en CI sobre la fixture. | C03–C06, C09 |
-| 2.6 | **Importador útil**: traer tipos y métodos, colocar las vistas en un hueco libre y dejar los atributos visibles. | C24, C25 |
+| 2.1 ✅ | **Parsers nuevos**: Python con `ast` (biblioteca estándar, sin dependencias nuevas). Java, C# y TS con un tokenizador que respete strings y comentarios, extrayendo miembros solo a profundidad 1 de llaves. Cabeceras con genéricos, bases con `:` en C#, `record`, propiedades C#, `readonly`/`static`/`async`/`?` en TS y métodos de interfaz. | C11–C16, C18 |
+| 2.2 ✅ | **Escaneo**: filtrar extensiones según `lenguaje`, incluir `.js`/`.jsx`/`.mjs` y podar `dirs[:]` (`.venv`, `venv`, `dist`, `obj`, `bin`, `out`, `.tox`). | C17 |
+| 2.3 ✅ | **Normalización**: conservar las mayúsculas del tipo genérico y distinguir `Set`/`Map` de `List`; normalizar acentos con `unicodedata` al emparejar nombres. | C01, C22 |
+| 2.4 ✅ | **Métricas honestas**: excluir replies y mensajes a actores del denominador; no exigir actores como clases; verificar colección vs. escalar según la multiplicidad; respetar la navegabilidad (`== 'navigable'`, en ambos extremos); usar `llamadas` para verificar el flujo emisor→receptor. | C10, C19–C21 |
+| 2.5 ✅ | **Generadores que compilan**: identificadores válidos (sin espacios ni acentos), roles sin la "s" duplicada, `extends`/`implements`, paquete configurable, TS con métodos y asociaciones, y devolver el código cuando no hay `carpeta_salida`. Criterio: `javac`, `tsc --strict` e `import` de Python pasan en CI sobre la fixture. | C03–C06, C09 |
+| 2.6 ✅ | **Importador útil**: traer tipos y métodos, colocar las vistas en un hueco libre y dejar los atributos visibles. | C24, C25 |
 
 ### Fase 3: capacidades nuevas (bajo demanda)
 Re-priorizadas desde el plan v2.0 y los hallazgos.
@@ -318,3 +318,44 @@ M.validar(M.Doc('modelo.mdj'), oose=False)['n_duplicados']   # -> 2
 PYTHONIOENCODING=cp1252 python3 server.py
 # mdj_documentacion(texto="Sesión del usuario") -> se guarda "SesiÃ³n del usuario"
 ```
+
+---
+
+## 9. Estado de avance
+
+**Hecho**
+- **Fase 0:** guardado transaccional, causas raíz de corrupción, nada se pierde en silencio, anotaciones MCP, stdio UTF-8 y protección "StarUML abierto" que bloquea si no puede verificar.
+- **Fase 1:**
+  - suite `tests/` (pytest) y CI en tres sistemas operativos;
+  - diagramas sin vistas, JSON inválido, clases sin nombre y validación de opciones;
+  - render portable (sin `sips` ni `perl`), caché por proyecto + id y exportación sin ambigüedad de homónimos;
+  - rotación de respaldos (`STARUML_MCP_BACKUP_KEEP`), timeouts y rutas de binarios por variables de entorno;
+  - carpetas permitidas (`STARUML_MCP_ALLOWED_DIRS`) y rutas relativas resueltas desde el `.mdj`;
+  - JSON-RPC conforme (lotes, `-32600`, notificaciones sin respuesta) y `mdj_modelo` paginado.
+- **Fase 2:**
+  - parsers nuevos: `ast` para Python y un limpiador más primer nivel de llaves para Java, C# y TS/JS;
+  - escaneo por lenguaje y sin carpetas de dependencias;
+  - normalización con acentos y genéricos;
+  - métricas honestas (actores, replies, multiplicidad, navegabilidad y flujo de llamadas);
+  - generadores que compilan (`javac`, `tsc --strict`, `import`) y vuelven al 100 % al compararse;
+  - importador con tipos y métodos, colocación sin encimar y modos `agregar`/`sincronizar`.
+- **Fase 3 (parcial):**
+  - `mdj_paquete_crear`, `mdj_diagrama_crear` y actores en `mdj_clase_crear`;
+  - `UMLInterfaceView`, asociación reflexiva con lazo y renombrar sin concatenar;
+  - `svg_revisar` tolerante;
+  - avisos de notación, estereotipos como texto y cajas encimadas.
+
+**Hallazgos adicionales que aparecieron al construir la suite (corregidos)**
+- `ps` recortaba la línea de comando a 80 columnas sin terminal. Con StarUML en una ruta larga (p. ej. `~/Applications` y un usuario de nombre largo) la protección dejaba de reconocerlo. Se usa `ps -ww`.
+- Chrome headless (`--headless=new`) deja 87 px sin pintar al pie de la ventana: el contenido cercano al borde inferior salía cortado, también en el código original. Ahora se renderiza con margen y se corta el PNG a la medida exacta.
+- Las referencias adelantadas de Python (`List["Pedido"]`) quedaban con comillas en el tipo.
+- Con el modelo real, los identificadores `BC_*` perdían el guion bajo al generar código, y las asociaciones hacia actores generaban campos de clases inexistentes.
+
+**Pendiente (mejoras, no bugs)**
+- Logging estructurado (plan v2.0 §1.2).
+- Auto-mensajes en secuencias.
+- Generador C#.
+- Parsers Kotlin y Go.
+- Consistencia casos de uso ↔ robustez en `mdj_validar`.
+- Diagramas de estados y de actividades.
+- La exportación real con StarUML y `svg_revisar` sobre SVG auténtico solo se probaron con dobles; conviene una corrida en una máquina con StarUML.

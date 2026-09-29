@@ -41,20 +41,43 @@ def ref(i):
 # Estado de la aplicacion
 # ---------------------------------------------------------------------------
 
-def staruml_cli():
-    for p in (os.path.expanduser('~/Applications/StarUML.app/Contents/MacOS/StarUML'),
-              '/Applications/StarUML.app/Contents/MacOS/StarUML'):
+def _programas_windows(*partes):
+    bases = [os.environ.get('ProgramFiles'), os.environ.get('ProgramFiles(x86)')]
+    if os.environ.get('LOCALAPPDATA'):
+        bases += [os.environ['LOCALAPPDATA'], os.path.join(os.environ['LOCALAPPDATA'], 'Programs')]
+    return [os.path.join(b, *partes) for b in bases if b]
+
+
+def _buscar_ejecutable(variable, rutas, nombres):
+    """La variable de entorno manda (si apunta a algo que no existe, no se adivina otra cosa); luego las rutas tipicas
+    de cada sistema y al final el PATH."""
+    env = os.environ.get(variable)
+    if env:
+        return env if os.path.exists(env) else None
+    for p in rutas:
         if os.path.exists(p):
             return p
-    return None
+    return next((w for w in map(shutil.which, nombres) if w), None)
+
+
+def staruml_cli():
+    return _buscar_ejecutable('STARUML_MCP_STARUML_BIN',
+                              [os.path.expanduser('~/Applications/StarUML.app/Contents/MacOS/StarUML'),
+                               '/Applications/StarUML.app/Contents/MacOS/StarUML', '/opt/StarUML/staruml',
+                               '/usr/lib/staruml/staruml'] + _programas_windows('StarUML', 'StarUML.exe'),
+                              ('staruml', 'StarUML'))
 
 
 def chrome_bin():
-    for p in ('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-              os.path.expanduser('~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')):
-        if os.path.exists(p):
-            return p
-    return None
+    return _buscar_ejecutable('STARUML_MCP_CHROME_BIN',
+                              ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+                               os.path.expanduser('~/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'),
+                               '/Applications/Chromium.app/Contents/MacOS/Chromium',
+                               '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge']
+                              + _programas_windows('Google', 'Chrome', 'Application', 'chrome.exe')
+                              + _programas_windows('Microsoft', 'Edge', 'Application', 'msedge.exe'),
+                              ('google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser', 'chrome',
+                               'msedge', 'microsoft-edge'))
 
 
 def es_gui_staruml(cmd):
@@ -77,7 +100,9 @@ def staruml_gui_abierto():
             if r.returncode:
                 return None
             return any(l.lower().startswith('"staruml.exe"') for l in r.stdout.splitlines())
-        r = subprocess.run(['ps', '-Ao', 'pid=,command='], capture_output=True, text=True, timeout=10)
+        # -ww: sin eso ps recorta la linea al ancho de la terminal (80 columnas sin terminal) y una ruta larga
+        # (~/Applications con un usuario de nombre largo) deja de reconocerse
+        r = subprocess.run(['ps', '-Aww', '-o', 'pid=,command='], capture_output=True, text=True, timeout=10)
     except Exception:
         return None
     if r.returncode:
@@ -100,7 +125,12 @@ class Doc:
             raise MdjError(f'No existe el archivo: {self.path}')
         with open(self.path, encoding='utf-8') as f:
             self._texto = f.read()  # estado al cargar: al guardar se compara contra el para no empeorar el archivo
-        self.d = json.loads(self._texto)
+        try:
+            self.d = json.loads(self._texto)
+        except ValueError as e:
+            raise MdjError(f'{self.path} no es un .mdj valido (JSON mal formado: {e})') from None
+        if not isinstance(self.d, dict):
+            raise MdjError(f'{self.path} no es un .mdj valido (la raiz no es un objeto)')
         self.reindex()
         self._ts = int(time.time() * 1000) - 600000
         self._rnd = random.Random()
@@ -282,6 +312,18 @@ def backup_file(path, folder=None):
     with open(path, 'rb') as a, open(dst, 'rb') as b:
         if a.read() != b.read():
             raise MdjError('El respaldo no quedo identico al original')
+    # rotacion: se conservan los ultimos STARUML_MCP_BACKUP_KEEP respaldos de este archivo (0 = todos)
+    try:
+        keep = int(os.environ.get('STARUML_MCP_BACKUP_KEEP', '100'))
+    except ValueError:
+        keep = 100
+    if keep > 0:
+        patron = re.compile(re.escape(base) + r'_\d{8}_\d{6}(_\d+)?\.mdj$')
+        propios = sorted((f for f in os.listdir(folder) if patron.match(f)),
+                         key=lambda f: os.path.getmtime(os.path.join(folder, f)))
+        for f in propios[:-keep]:
+            if os.path.join(folder, f) != dst:
+                os.remove(os.path.join(folder, f))
     return dst
 
 
@@ -307,9 +349,15 @@ def resumen(doc):
     return out
 
 
-def modelo(doc, filtro=None, paquete=None):
+def modelo(doc, filtro=None, paquete=None, limite=None, desde=0):
     clases, asoc, gen = [], [], []
     pk = doc.find(paquete)['_id'] if paquete else None
+    vistas_de = {}
+    for dg in doc.diagrams():
+        for v in dg.get('ownedViews', []):
+            m = v.get('model')
+            if isinstance(m, dict):
+                vistas_de.setdefault(m.get('$ref'), []).append(dg.get('name'))
     for o in doc.ids.values():
         if not o:
             continue
@@ -336,13 +384,20 @@ def modelo(doc, filtro=None, paquete=None):
                                       'navegable': e1.get('navigable') == 'navigable'},
                          'extremo2': {'clase': n2, 'mult': e2.get('multiplicity', ''), 'rol': e2.get('name', ''),
                                       'navegable': e2.get('navigable') == 'navigable'},
-                         'vistas': [dg.get('name') for dg, _ in doc.views_of(o['_id'])]})
+                         'vistas': vistas_de.get(o['_id'], [])})
         elif o['_type'] in ('UMLGeneralization', 'UMLRealization', 'UMLDependency', 'UMLInterfaceRealization'):
             s, t = doc.name_of(o['source']['$ref']), doc.name_of(o['target']['$ref'])
             if filtro and filtro.lower() not in (s + t).lower():
                 continue
             gen.append({'id': o['_id'], 'tipo': o['_type'], 'de': s, 'a': t})
-    return {'clases': clases, 'asociaciones': asoc, 'otras_relaciones': gen}
+    res = {'clases': clases, 'asociaciones': asoc, 'otras_relaciones': gen}
+    if limite:
+        desde, limite = max(0, int(desde or 0)), int(limite)
+        total = {k: len(v) for k, v in res.items()}
+        res = {k: v[desde:desde + limite] for k, v in res.items()}
+        res.update({'total': total, 'desde': desde,
+                    'siguiente_desde': desde + limite if any(n > desde + limite for n in total.values()) else None})
+    return res
 
 
 def interaction_of(doc, dg):
@@ -461,14 +516,14 @@ def reglas_oose(doc):
     for i, k in kinds.items():
         o = doc.ids[i]
         if o.get('operations'):
-            prob.append(f'{o["name"]} ({k}) tiene metodos; en analisis no se ponen metodos')
+            prob.append(f'{o.get("name", "(sin nombre)")} ({k}) tiene metodos; en analisis no se ponen metodos')
         if k in ('boundary', 'control') and o.get('attributes'):
-            prob.append(f'{o["name"]} ({k}) tiene atributos; boundary y control van sin atributos')
+            prob.append(f'{o.get("name", "(sin nombre)")} ({k}) tiene atributos; boundary y control van sin atributos')
     # un control por paquete
     por_pk = {}
     for i, k in kinds.items():
         if k == 'control':
-            por_pk.setdefault(doc.parent.get(i), []).append(doc.ids[i]['name'])
+            por_pk.setdefault(doc.parent.get(i), []).append(doc.ids[i].get('name', '(sin nombre)'))
     for pk, cs in por_pk.items():
         if len(cs) > 1:
             prob.append(f'El paquete {doc.name_of(pk)} tiene {len(cs)} controles: {cs}')
@@ -489,6 +544,26 @@ def reglas_oose(doc):
                 prob.append(f'Asociacion control--actor: {nm} (debe pasar por una boundary)')
             elif par == {'entity', 'actor'}:
                 prob.append(f'Asociacion entity--actor: {nm}')
+    # estereotipos como texto (StarUML dibuja una caja tachada) y una sola notacion (iconos) para robustez
+    for o in doc.ids.values():
+        if o and o['_type'] == 'UMLClass' and isinstance(o.get('stereotype'), str) and o['stereotype'] in ('boundary', 'control', 'entity'):
+            prob.append(f'{o.get("name", "(sin nombre)")}: el estereotipo {o["stereotype"]} esta como texto; debe ser referencia al perfil')
+    cajas_tipos = ('UMLClassView', 'UMLActorView', 'UMLInterfaceView', 'UMLNoteView', 'UMLUseCaseView')
+    for dg in doc.diagrams():
+        if dg['_type'] not in ('UMLClassDiagram', 'UMLUseCaseDiagram'):
+            continue
+        cajas = []
+        for v in dg.get('ownedViews', []):
+            m = v.get('model')
+            if v['_type'] == 'UMLClassView' and isinstance(m, dict) and kinds.get(m.get('$ref')) in ('boundary', 'control', 'entity') \
+                    and v.get('stereotypeDisplay', 'label') != 'icon':
+                avisos.append(f'{dg.get("name")}: {doc.name_of(m["$ref"])} no usa la notacion de iconos')
+            if v['_type'] in cajas_tipos and v.get('visible', True) is not False and all(isinstance(v.get(k), (int, float)) for k in ('left', 'top', 'width', 'height')):
+                cajas.append((doc.name_of(m['$ref']) if isinstance(m, dict) else 'nota', v['left'], v['top'], v['left'] + v['width'], v['top'] + v['height']))
+        for i, x in enumerate(cajas):
+            for y in cajas[i + 1:]:
+                if x[1] < y[3] and y[1] < x[3] and x[2] < y[4] and y[2] < x[4]:
+                    avisos.append(f'{dg.get("name")}: cajas encimadas {x[0]} / {y[0]}')
     # secuencias
     for dg in doc.diagrams():
         if dg['_type'] != 'UMLSequenceDiagram' or not dg.get('ownedViews'):
@@ -509,7 +584,7 @@ def reglas_oose(doc):
             s, t = tipo_ll.get(m['source']['$ref']), tipo_ll.get(m['target']['$ref'])
             ks, kt = kinds.get(s, '?'), kinds.get(t, '?')
             rep = m.get('messageSort') == 'reply'
-            tag = f'{dg["name"]} #{n} {m.get("name")} ({ks}->{kt})'
+            tag = f'{dg.get("name")} #{n} {m.get("name")} ({ks}->{kt})'
             ok = {('actor', 'boundary'), ('boundary', 'control'), ('control', 'entity'), ('entity', 'control'),
                   ('control', 'boundary'), ('boundary', 'actor'), ('entity', 'entity')}
             if (ks, kt) not in ok:
@@ -528,7 +603,7 @@ def reglas_oose(doc):
             if v['_type'] == 'UMLSeqMessageView':
                 tipos = [s['_type'] for s in v.get('subViews', [])]
                 if tipos.count('EdgeLabelView') != 3 or tipos.count('UMLActivationView') != 1:
-                    prob.append(f'{dg["name"]}: vista de mensaje incompleta {v["_id"]} ({tipos.count("EdgeLabelView")} etiquetas)')
+                    prob.append(f'{dg.get("name")}: vista de mensaje incompleta {v["_id"]} ({tipos.count("EdgeLabelView")} etiquetas)')
                 act = [s for s in v.get('subViews', []) if s['_type'] == 'UMLActivationView']
                 m = doc.ids.get(v['model']['$ref'])
                 if act and m and act[0].get('visible', True) is not False:
@@ -547,7 +622,7 @@ def reglas_oose(doc):
             if not any(a - 1 <= y <= b + 1 for a, b in acts.get(src, [])):
                 fuera += 1
         if fuera:
-            avisos.append(f'{dg["name"]}: {fuera} llamadas salen de una lifeline sin activacion')
+            avisos.append(f'{dg.get("name")}: {fuera} llamadas salen de una lifeline sin activacion')
     return {'problemas': prob, 'avisos': avisos}
 
 
@@ -604,6 +679,10 @@ def junction(v, p):
 
 def ruta(tail_v, head_v, medios=()):
     medios = [tuple(m) for m in medios or ()]
+    if not medios and tail_v.get('_id') == head_v.get('_id'):
+        # asociacion reflexiva: un lazo por la esquina superior derecha (una recta de largo cero no se veria)
+        l, t, w, h = tail_v['left'], tail_v['top'], tail_v['width'], tail_v['height']
+        medios = [(l + w * 3 / 4, t - 30), (l + w + 30, t - 30), (l + w + 30, t + h / 4)]
     a = junction(tail_v, medios[0] if medios else centro(head_v))
     b = junction(head_v, medios[-1] if medios else centro(tail_v))
     return ';'.join(f'{round(x)}:{round(y)}' for x, y in [a] + medios + [b])
@@ -666,17 +745,23 @@ def rehacer_atributos_vista(doc, v, cls):
         s = viejos.get(a['_id']) or {'_type': 'UMLAttributeView', '_id': doc.new_id(), '_parent': ref(acv['_id']),
                                      'model': ref(a['_id']), 'font': 'Arial;13;0', 'parentStyle': True}
         s.update({'left': v['left'] + 5, 'top': v['top'] + 72 + 15 * i, 'width': v['width'] - 9, 'height': 13,
-                  'text': '+' + a['name'], 'horizontalAlignment': 0})
+                  'text': _texto_atributo(doc, a), 'horizontalAlignment': 0})
         subs.append(s)
     acv['subViews'] = subs
     v['height'] = max(v['height'] if n == 0 else 0, 73 + 15 * n)
+
+
+def _texto_atributo(doc, a):
+    t = a.get('type')
+    t = doc.name_of(t['$ref']) if isinstance(t, dict) and t.get('$ref') else (t if isinstance(t, str) else '')
+    return '+' + (a.get('name') or '') + (f': {t}' if t else '')
 
 
 def set_atributos(doc, cls, nombres):
     repetidos = sorted({n for n in nombres if nombres.count(n) > 1})
     if repetidos:  # el mismo atributo quedaria dos veces en el archivo, con el mismo _id
         raise MdjError(f'Atributos repetidos: {repetidos}')
-    viejos = {a['name']: a for a in cls.get('attributes', [])}
+    viejos = {a.get('name'): a for a in cls.get('attributes', [])}
     nuevos = []
     for n in nombres:
         a = viejos.get(n) or {'_type': 'UMLAttribute', '_id': doc.new_id(), '_parent': ref(cls['_id']), 'name': n, 'type': ''}
@@ -729,15 +814,61 @@ def nota(doc, dg, texto, x, y, ancho, alto=None, vista=None):
     if alto is None:
         alto = lineas_nota(texto, ancho - 10) * 11 + 15 + random.randint(0, 3)
     if vista:
-        nv = [v for v in dg['ownedViews'] if v['_id'] == vista]
+        nv = [v for v in dg.get('ownedViews', []) if v['_id'] == vista]
         if not nv:
             raise MdjError(f'No hay vista {vista} en {dg.get("name")}')
         nv = nv[0]
     else:
         nv = {'_type': 'UMLNoteView', '_id': doc.new_id(), '_parent': ref(dg['_id']), 'font': 'Arial;11;0', 'parentStyle': False}
-        dg['ownedViews'].append(nv)
+        dg.setdefault('ownedViews', []).append(nv)
     nv.update({'left': x, 'top': y, 'width': ancho, 'height': alto, 'text': texto})
     return nv
+
+
+def modelo_raiz(doc):
+    modelos = [o for o in doc.d.get('ownedElements', []) if isinstance(o, dict) and o.get('_type') == 'UMLModel']
+    if not modelos:
+        raise MdjError('El proyecto no tiene un UMLModel; indica dentro_de')
+    return modelos[0]
+
+
+def crear_paquete(doc, nombre, dentro_de=None):
+    padre = doc.find(dentro_de, types=('UMLModel', 'UMLPackage', 'UMLSubsystem')) if dentro_de else modelo_raiz(doc)
+    pk = {'_type': 'UMLPackage', '_id': doc.new_id(), '_parent': ref(padre['_id']), 'name': nombre}
+    padre.setdefault('ownedElements', []).append(pk)
+    doc.reindex()
+    return pk
+
+
+def crear_diagrama(doc, tipo, nombre, dentro_de=None, por_defecto=False):
+    """Diagrama de clases, de casos de uso o de secuencia. El de secuencia se crea como lo hace StarUML:
+    colaboracion > interaccion > diagrama, con su marco."""
+    padre = doc.find(dentro_de, types=('UMLModel', 'UMLPackage', 'UMLSubsystem')) if dentro_de else modelo_raiz(doc)
+    if tipo in ('clases', 'casos_de_uso'):
+        dg = {'_type': 'UMLClassDiagram' if tipo == 'clases' else 'UMLUseCaseDiagram', '_id': doc.new_id(),
+              '_parent': ref(padre['_id']), 'name': nombre}
+        padre.setdefault('ownedElements', []).append(dg)
+    elif tipo == 'secuencia':
+        cid, iid, did, fid, l1, l2 = [doc.new_id() for _ in range(6)]
+        marco = {'_type': 'UMLFrameView', '_id': fid, '_parent': ref(did), 'model': ref(did),
+                 'subViews': [{'_type': 'LabelView', '_id': l1, '_parent': ref(fid), 'font': 'Arial;13;0',
+                               'left': 32.72998046875, 'top': 15, 'width': round(ancho13(nombre), 2), 'height': 13, 'text': nombre},
+                              {'_type': 'LabelView', '_id': l2, '_parent': ref(fid), 'font': 'Arial;13;1',
+                               'left': 13, 'top': 15, 'width': 14.72, 'height': 13, 'text': 'sd'}],
+                 'font': 'Arial;13;0', 'left': 8, 'top': 10, 'width': 695, 'height': 595,
+                 'nameLabel': ref(l1), 'frameTypeLabel': ref(l2)}
+        dg = {'_type': 'UMLSequenceDiagram', '_id': did, '_parent': ref(iid), 'name': nombre, 'ownedViews': [marco]}
+        inter = {'_type': 'UMLInteraction', '_id': iid, '_parent': ref(cid), 'name': nombre, 'ownedElements': [dg]}
+        padre.setdefault('ownedElements', []).append(
+            {'_type': 'UMLCollaboration', '_id': cid, '_parent': ref(padre['_id']), 'name': nombre, 'ownedElements': [inter]})
+    else:
+        raise MdjError('tipo debe ser "clases", "casos_de_uso" o "secuencia"')
+    if por_defecto:
+        for otro in doc.diagrams():
+            otro.pop('defaultDiagram', None)
+        dg['defaultDiagram'] = True
+    doc.reindex()
+    return dg
 
 
 def _clonar(doc, v, modelos):
@@ -792,7 +923,7 @@ def vista_nueva(doc, dg, el, x, y, ancho=None, alto=None):
     for d2 in doc.diagrams():
         for v in d2.get('ownedViews', []):
             m = v.get('model')
-            if v['_type'] in ('UMLClassView', 'UMLActorView') and isinstance(m, dict):
+            if v['_type'] in ('UMLClassView', 'UMLActorView', 'UMLInterfaceView') and isinstance(m, dict):
                 o = doc.ids.get(m['$ref'])
                 if o and o['_id'] != el['_id'] and doc.kind(o) == k and o['_type'] == el['_type']:
                     plantilla = (v, o); break
@@ -812,6 +943,7 @@ def vista_nueva(doc, dg, el, x, y, ancho=None, alto=None):
     else:
         vid = doc.new_id(); ncid = doc.new_id(); labs = [doc.new_id() for _ in range(4)]
         es_actor = el['_type'] == 'UMLActor'
+        robustez = k in ('boundary', 'control', 'entity')
         nc = {'_type': 'UMLNameCompartmentView', '_id': ncid, '_parent': ref(vid), 'model': ref(el['_id']),
               'subViews': [
                   {'_type': 'LabelView', '_id': labs[0], '_parent': ref(ncid), 'visible': False, 'font': 'Arial;13;0', 'parentStyle': True, 'left': x, 'top': y, 'height': 13},
@@ -820,27 +952,36 @@ def vista_nueva(doc, dg, el, x, y, ancho=None, alto=None):
                   {'_type': 'LabelView', '_id': labs[3], '_parent': ref(ncid), 'visible': False, 'font': 'Arial;13;0', 'parentStyle': True, 'left': x, 'top': y, 'height': 13, 'horizontalAlignment': 1}],
               'font': 'Arial;13;0', 'parentStyle': True, 'left': x, 'top': y + 40, 'width': ancho + 1, 'height': 25,
               'stereotypeLabel': ref(labs[0]), 'nameLabel': ref(labs[1]), 'namespaceLabel': ref(labs[2]), 'propertyLabel': ref(labs[3])}
-        con_attr = (k == 'entity')
+        con_attr = not es_actor and k not in ('boundary', 'control')
         ac = _compartment(doc, 'UMLAttributeCompartmentView', vid, el['_id'], visible=con_attr, x=x, y=y + 67)
         subs = [nc, ac, _compartment(doc, 'UMLOperationCompartmentView', vid, el['_id']),
                 _compartment(doc, 'UMLReceptionCompartmentView', vid, el['_id']),
                 _compartment(doc, 'UMLTemplateParameterCompartmentView', vid, el['_id'])]
-        nv = {'_type': 'UMLActorView' if es_actor else 'UMLClassView', '_id': vid, '_parent': ref(dg['_id']),
+        tipo_vista = 'UMLActorView' if es_actor else ('UMLInterfaceView' if el['_type'] == 'UMLInterface' else 'UMLClassView')
+        nv = {'_type': tipo_vista, '_id': vid, '_parent': ref(dg['_id']),
               'model': ref(el['_id']), 'subViews': subs, 'font': 'Arial;13;0', 'parentStyle': False,
               'containerChangeable': True, 'left': x, 'top': y, 'width': ancho, 'height': 80 if es_actor else 65}
         if not es_actor:
-            nv['stereotypeDisplay'] = 'icon'
+            nv['stereotypeDisplay'] = 'icon' if robustez else 'label'
         nv.update({'nameCompartment': ref(ncid)})
         if not con_attr:
             nv['suppressAttributes'] = True
-        nv['suppressOperations'] = True
+        if es_actor or robustez or not el.get('operations'):
+            nv['suppressOperations'] = True
         nv.update({'attributeCompartment': ref(subs[1]['_id']), 'operationCompartment': ref(subs[2]['_id']),
                    'receptionCompartment': ref(subs[3]['_id']), 'templateParameterCompartment': ref(subs[4]['_id'])})
     lab = _name_label(nv)
     if lab:
         lab['text'] = nombre
+    # los atributos se ven en todo lo que no sea actor, boundary o control (aunque la plantilla los ocultara)
+    muestra_attrs = el['_type'] != 'UMLActor' and k not in ('boundary', 'control')
+    if muestra_attrs and el.get('attributes'):
+        nv.pop('suppressAttributes', None)
+        for s in nv.get('subViews', []):
+            if s['_type'] == 'UMLAttributeCompartmentView':
+                s.pop('visible', None)
     dg.setdefault('ownedViews', []).append(nv)
-    if k == 'entity':
+    if muestra_attrs:
         rehacer_atributos_vista(doc, nv, el)
     if alto:
         nv['height'] = alto
@@ -981,14 +1122,14 @@ def vista_asociacion(doc, dg, asoc, tail_v, head_v, medios=()):
           'tailRoleNameLabel': ref(subs[3]['_id']), 'tailPropertyLabel': ref(subs[4]['_id']), 'tailMultiplicityLabel': ref(subs[5]['_id']),
           'headRoleNameLabel': ref(subs[6]['_id']), 'headPropertyLabel': ref(subs[7]['_id']), 'headMultiplicityLabel': ref(subs[8]['_id']),
           'tailQualifiersCompartment': ref(subs[9]['_id']), 'headQualifiersCompartment': ref(subs[10]['_id'])}
-    dg['ownedViews'].append(av)
+    dg.setdefault('ownedViews', []).append(av)
     etiquetas_asoc(doc, av)
     return av
 
 
 def linea_ruta(doc, dg, v, medios):
-    tail = [x for x in dg['ownedViews'] if x['_id'] == v['tail']['$ref']]
-    head = [x for x in dg['ownedViews'] if x['_id'] == v['head']['$ref']]
+    tail = [x for x in dg.get('ownedViews', []) if x['_id'] == v.get('tail', {}).get('$ref')]
+    head = [x for x in dg.get('ownedViews', []) if x['_id'] == v.get('head', {}).get('$ref')]
     if not tail or not head:
         raise MdjError('La linea no tiene sus dos cajas en el mismo diagrama')
     v['points'] = ruta(tail[0], head[0], medios)
@@ -1112,14 +1253,32 @@ def _ids_y_refs(o):
     return ids, refs
 
 
+def _opciones_secuencia(opciones):
+    op = {'y_inicio': 152, 'espaciado': [29, 36], 'espaciado_izq_der': [50, 56], 'extra_flujo': [22, 34],
+          'semilla': 24092026, 'margen_etiqueta': 30, 'separacion_minima': 170}
+    es_num = lambda n: isinstance(n, (int, float)) and not isinstance(n, bool) and math.isfinite(n)
+    for k, v in (opciones or {}).items():
+        if k not in op:
+            raise MdjError(f'Opcion desconocida "{k}". Validas: {sorted(op)}')
+        if k in ('espaciado', 'espaciado_izq_der', 'extra_flujo'):
+            if not (isinstance(v, (list, tuple)) and len(v) == 2 and all(es_num(n) for n in v) and 0 <= v[0] <= v[1]):
+                raise MdjError(f'"{k}" debe ser [minimo, maximo] con 0 <= minimo <= maximo')
+            v = [int(round(v[0])), int(round(v[1]))]
+        elif k == 'semilla':
+            if not (es_num(v) or isinstance(v, str)):
+                raise MdjError('"semilla" debe ser un numero o un texto')
+        elif not es_num(v) or v < 0:
+            raise MdjError(f'"{k}" debe ser un numero >= 0')
+        op[k] = v
+    return op
+
+
 def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
     """Rehace por completo un diagrama de secuencia.
     lifelines: [{'clave': 'asesor', 'tipo': 'Asesor de Renta'}, ...] en orden de izquierda a derecha.
     mensajes: [{'de': clave, 'a': clave, 'nombre': 'buscarCliente(rfc)', 'reply': False, 'flujo': 'F1'}, ...]
     """
-    op = {'y_inicio': 152, 'espaciado': [29, 36], 'espaciado_izq_der': [50, 56], 'extra_flujo': [22, 34],
-          'semilla': 24092026, 'margen_etiqueta': 30, 'separacion_minima': 170}
-    op.update(opciones or {})
+    op = _opciones_secuencia(opciones)
     rnd = random.Random(op['semilla'])
     dg = doc.diagram(diagrama)
     if dg['_type'] != 'UMLSequenceDiagram':
@@ -1186,7 +1345,7 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
     centro_ll, ancho_ll = {}, {}
     x = None; prev_w = None
     for j, c in enumerate(claves):
-        texto = ': ' + tipo_de[c]['name']
+        texto = ': ' + (tipo_de[c].get('name') or '')
         w = max(96, round(7.4 * len(texto) + 22))
         if prev_w is None:
             x = 24 + w / 2
@@ -1291,7 +1450,7 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
                  {'_type': 'UMLNameCompartmentView', '_id': ncid, '_parent': ref(vid), 'model': ref(ll_id),
                   'subViews': [lab0,
                                {'_type': 'LabelView', '_id': l1, '_parent': ref(ncid), 'font': 'Arial;13;1', 'parentStyle': True,
-                                'left': left + 5, 'top': 87, 'width': w - 9, 'height': 13, 'text': ': ' + t['name']},
+                                'left': left + 5, 'top': 87, 'width': w - 9, 'height': 13, 'text': ': ' + (t.get('name') or '')},
                                {'_type': 'LabelView', '_id': l2, '_parent': ref(ncid), 'visible': False, 'font': 'Arial;13;0', 'parentStyle': True,
                                 'left': left, 'top': 87, 'width': 103.30810546875, 'height': 13, 'text': f'(from {inter.get("name", "")})'},
                                {'_type': 'LabelView', '_id': l3, '_parent': ref(ncid), 'visible': False, 'font': 'Arial;13;0', 'parentStyle': True,

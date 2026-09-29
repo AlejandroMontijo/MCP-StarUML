@@ -27,3 +27,6 @@ scratch/
 pruebas/
 respaldos/
 
+
+# pytest
+.pytest_cache/

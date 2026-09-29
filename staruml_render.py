@@ -1,50 +1,112 @@
 # Exportar diagramas con el CLI de StarUML, revisar el SVG y recortar zonas a PNG.
-import base64
+# Funciona en macOS, Linux y Windows: StarUML y Chrome se buscan en las rutas tipicas, en el PATH o en
+# STARUML_MCP_STARUML_BIN / STARUML_MCP_CHROME_BIN; los limites de tiempo se ajustan con
+# STARUML_MCP_EXPORT_TIMEOUT y STARUML_MCP_CHROME_TIMEOUT (segundos).
 import glob
+import hashlib
 import json
 import os
+import pathlib
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
 import uuid
-from urllib.parse import quote
+import zlib
+from html import unescape
 
 from staruml_mdj import Doc, MdjError, staruml_cli, chrome_bin
+
+
+def _timeout(variable, defecto):
+    try:
+        return max(1, int(os.environ.get(variable, defecto)))
+    except ValueError:
+        return defecto
+
+
+def _nombre_archivo(nombre):
+    """Nombre de diagrama convertido en nombre de archivo valido en cualquier sistema."""
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', nombre or '').strip(' .') or 'diagrama'
+
 
 # ---------------------------------------------------------------------------
 # Exportar
 # ---------------------------------------------------------------------------
 
-def exportar(mdj, carpeta, diagrama=None, formato='svg', timeout=150):
+def _correr(cmd, timeout):
+    """Ejecuta el CLI con limite de tiempo. Si se pasa, mata tambien a sus procesos hijos (Electron)."""
+    kw = {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == 'nt' else {'start_new_session': True}
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors='replace', **kw)
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if os.name == 'nt':
+            subprocess.run(['taskkill', '/T', '/F', '/PID', str(p.pid)], capture_output=True)
+        else:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        p.communicate()
+        raise MdjError(f'La exportacion no termino en {timeout} s') from None
+    return (out or '') + (err or '')
+
+
+def exportar(mdj, carpeta, diagrama=None, formato='svg', timeout=None):
     cli = staruml_cli()
     if not cli:
-        raise MdjError('No encontre StarUML.app en ~/Applications ni en /Applications')
+        raise MdjError('No encontre StarUML: instalalo o define STARUML_MCP_STARUML_BIN con la ruta del ejecutable')
     if formato not in ('svg', 'png', 'jpeg', 'pdf'):
         raise MdjError('formato debe ser svg, png, jpeg o pdf')
+    timeout = timeout or _timeout('STARUML_MCP_EXPORT_TIMEOUT', 150)
     mdj = os.path.abspath(os.path.expanduser(mdj))
     carpeta = os.path.abspath(os.path.expanduser(carpeta))
     os.makedirs(carpeta, exist_ok=True)
     if diagrama in (None, '', 'todos'):
         selector = '@UMLDiagram'
-    else:
-        doc = Doc(mdj)
-        dg = doc.diagram(diagrama)
-        selector = f'@{dg["_type"]}[name={dg["name"]}]'
-    antes = {f: os.path.getmtime(f) for f in glob.glob(os.path.join(carpeta, f'*.{formato}'))}
-    cmd = ['perl', '-e', f'alarm {int(timeout)}; exec @ARGV', cli, 'image', mdj, '-f', formato, '-s', selector,
-           '-o', os.path.join(carpeta, f'<%=element.name%>.{formato}')]
+        antes = {f: os.path.getmtime(f) for f in glob.glob(os.path.join(carpeta, f'*.{formato}'))}
+        salida = _correr([cli, 'image', mdj, '-f', formato, '-s', selector,
+                          '-o', os.path.join(carpeta, f'<%=element.name%>.{formato}')], timeout)
+        total = re.search(r'Total (\d+) diagrams were exported', salida)
+        archivos = sorted(f for f in glob.glob(os.path.join(carpeta, f'*.{formato}')) if os.path.getmtime(f) != antes.get(f))
+        return {'exportados': int(total.group(1)) if total else None, 'archivos': archivos, 'selector': selector,
+                'nota': 'Diagramas con el mismo nombre se sobrescriben entre si.',
+                'salida_cli': salida.strip()[-600:] if not total else ''}
+    doc = Doc(mdj)
+    dg = doc.diagram(diagrama)
+    nombre = dg.get('name') or ''
+    # el selector del CLI busca por nombre: si hay homonimos, o el nombre trae corchetes, se exporta desde una copia
+    # temporal donde el diagrama pedido es el unico con ese nombre
+    homonimos = [d for d in doc.diagrams() if d.get('name') == nombre and d is not dg]
+    tmp = tempfile.mkdtemp(prefix='staruml_mcp_exp_')
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 15)
-    except subprocess.TimeoutExpired:
-        raise MdjError('La exportacion no termino a tiempo')
-    salida = (r.stdout or '') + (r.stderr or '')
-    total = re.search(r'Total (\d+) diagrams were exported', salida)
-    archivos = sorted(f for f in glob.glob(os.path.join(carpeta, f'*.{formato}')) if os.path.getmtime(f) != antes.get(f))
-    return {'exportados': int(total.group(1)) if total else None, 'archivos': archivos, 'selector': selector,
-            'nota': 'Diagramas con el mismo nombre se sobrescriben entre si.' if selector == '@UMLDiagram' else '',
-            'salida_cli': salida.strip()[-600:] if not total else ''}
+        fuente, aviso = mdj, ''
+        if homonimos or re.search(r'[\[\]]', nombre):
+            for i, d in enumerate(homonimos):
+                d['name'] = f'{nombre}__mcp_homonimo_{i}'
+            if re.search(r'[\[\]]', nombre):
+                dg['name'] = nombre = re.sub(r'[\[\]]', '_', nombre)
+                aviso = 'El nombre del diagrama tiene corchetes, que el selector de StarUML no admite; se exporto como ' + nombre
+            fuente = os.path.join(tmp, 'modelo.mdj')
+            with open(fuente, 'w', encoding='utf-8', newline='\n') as f:
+                json.dump(doc.d, f, ensure_ascii=False, indent='\t')
+        selector = f'@{dg["_type"]}[name={nombre}]'
+        destino_tmp = os.path.join(tmp, 'out')
+        os.makedirs(destino_tmp)
+        salida = _correr([cli, 'image', fuente, '-f', formato, '-s', selector,
+                          '-o', os.path.join(destino_tmp, f'<%=element.name%>.{formato}')], timeout)
+        producidos = [f for f in glob.glob(os.path.join(destino_tmp, '**', f'*.{formato}'), recursive=True)]
+        if len(producidos) != 1:
+            raise MdjError(f'StarUML no genero la imagen del diagrama "{dg.get("name")}" '
+                           f'({len(producidos)} archivos). Salida del CLI: {salida.strip()[-400:]}')
+        destino = os.path.join(carpeta, f'{_nombre_archivo(dg.get("name"))}.{formato}')
+        shutil.move(producidos[0], destino)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return {'exportados': 1, 'archivos': [destino], 'selector': selector, 'nota': aviso, 'salida_cli': ''}
 
 
 # ---------------------------------------------------------------------------
@@ -82,26 +144,41 @@ def _cruza(p, q, r):
     return t0 < t1 - 1e-9
 
 
+def _atributo(a, k, defecto=None):
+    m = re.search(r'\s' + k + r'="([^"]*)"', a)
+    return m.group(1) if m else defecto
+
+
+def _numero(v, defecto=0.0):
+    m = re.search(r'-?[\d.]+', v or '')
+    try:
+        return float(m.group(0)) if m else defecto
+    except ValueError:
+        return defecto
+
+
 def revisar_svg(svg, mdj, diagrama, max_items=80):
     """Lineas que cruzan notas o cajas, lineas sobre etiquetas, etiquetas encimadas,
     texto que se sale de las notas y etiquetas sobre activaciones (secuencias)."""
-    s = open(os.path.expanduser(svg), encoding='utf-8').read()
+    with open(os.path.expanduser(svg), encoding='utf-8') as f:
+        s = f.read()
     doc = Doc(mdj)
     dg = doc.diagram(diagrama)
     textos, off = [], None
     for m in re.finditer(r'<text([^>]*)>([^<]*)</text>', s):
-        a, t = m.group(1), m.group(2)
+        a, t = m.group(1), unescape(m.group(2))
         if not t.strip():
             continue
-        t = t.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '"')
-        g = lambda k: re.search(r'\s' + k + r'="([^"]*)"', a).group(1)
-        x, y = float(g('x')), float(g('y'))
-        px = float(g('font-size').replace('px', ''))
-        bold = 'bold' in g('font-weight')
+        # atributos que falten toman el valor por defecto de SVG
+        x, y = _numero(_atributo(a, 'x')), _numero(_atributo(a, 'y'))
+        px = _numero(_atributo(a, 'font-size'), 13.0) or 13.0
+        peso = _atributo(a, 'font-weight', 'normal')
+        bold = 'bold' in peso or _numero(peso, 400) >= 600
         tr = re.search(r'matrix\(1 0 0 1 (-?[\d.]+) (-?[\d.]+)\)', a)
         if tr:
             off = (float(tr.group(1)), float(tr.group(2)))
-        w = _ancho(t, px, bold); anc = g('text-anchor')
+        w = _ancho(t, px, bold)
+        anc = _atributo(a, 'text-anchor', 'start')
         x0 = x - w / 2 if anc == 'middle' else (x - w if anc == 'end' else x)
         textos.append((t, x0, y - px / 2 + 1, x0 + w, y + px / 2 - 1))
     dx, dy = off if off else (0, 0)
@@ -123,7 +200,7 @@ def revisar_svg(svg, mdj, diagrama, max_items=80):
                 segs.append((p, q))
     cajas, notas = [], []
     for v in dg.get('ownedViews', []):
-        if v['_type'] in ('UMLClassView', 'UMLActorView', 'UMLNoteView') and v.get('visible', True) is not False:
+        if v['_type'] in ('UMLClassView', 'UMLActorView', 'UMLInterfaceView', 'UMLNoteView') and v.get('visible', True) is not False:
             r = (v['left'], v['top'], v['left'] + v['width'], v['top'] + v['height'])
             if v['_type'] == 'UMLNoteView':
                 notas.append((v.get('text', '')[:40], r))
@@ -157,16 +234,13 @@ def revisar_svg(svg, mdj, diagrama, max_items=80):
     acts = []
     for m in re.finditer(r'<rect([^>]*)>', s):
         a = m.group(1)
-        try:
-            g = lambda k: float(re.search(r'\s' + k + r'="([^"]*)"', a).group(1))
-            if abs(g('width') - 14) > 0.01 or g('height') < 18:
-                continue
-            tr = re.search(r'matrix\(1 0 0 1 (-?[\d.]+) (-?[\d.]+)\)', a)
-            rx, ry = (float(tr.group(1)), float(tr.group(2))) if tr else (0, 0)
-            x, y = g('x') + rx - dx, g('y') + ry - dy
-            acts.append((x, y, x + 14, y + g('height')))
-        except Exception:
+        ancho, alto = _numero(_atributo(a, 'width'), -1), _numero(_atributo(a, 'height'), -1)
+        if abs(ancho - 14) > 0.01 or alto < 18:
             continue
+        tr = re.search(r'matrix\(1 0 0 1 (-?[\d.]+) (-?[\d.]+)\)', a)
+        rx, ry = (float(tr.group(1)), float(tr.group(2))) if tr else (0, 0)
+        x, y = _numero(_atributo(a, 'x')) + rx - dx, _numero(_atributo(a, 'y')) + ry - dy
+        acts.append((x, y, x + 14, y + alto))
     for t in textos:
         for r in acts:
             if t[1] < r[2] and r[0] < t[3] and t[2] < r[3] and r[1] < t[4]:
@@ -182,112 +256,146 @@ def revisar_svg(svg, mdj, diagrama, max_items=80):
 
 def _svg_size(svg):
     with open(svg, encoding='utf-8') as f:
-        head = f.read(600)
-    m = re.search(r'width="([\d.]+)" height="([\d.]+)"', head)
+        head = f.read(2000)
+    m = re.search(r'<svg[^>]*?\swidth="([\d.]+)[^"]*"[^>]*?\sheight="([\d.]+)', head) or \
+        re.search(r'width="([\d.]+)" height="([\d.]+)"', head)
     return (int(float(m.group(1))), int(float(m.group(2)))) if m else (None, None)
 
 
-def recortar(svg, x=0, y=0, ancho=None, alto=None, salida=None, max_lado=None, timeout=30):
+def tamano_png(data):
+    """(ancho, alto) leidos de la cabecera IHDR de un PNG."""
+    if data[:8] != b'\x89PNG\r\n\x1a\n':
+        raise MdjError('La imagen generada no es un PNG valido')
+    return int.from_bytes(data[16:20], 'big'), int.from_bytes(data[20:24], 'big')
+
+
+def _png_primeras_filas(data, alto):
+    """Deja solo las primeras `alto` filas de un PNG. No hace falta reinterpretar pixeles: el filtro de cada fila
+    solo depende de las anteriores, asi que basta con cortar el flujo descomprimido."""
+    w, h = tamano_png(data)
+    bits, color, entrelazado = data[24], data[25], data[28]
+    canales = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(color)
+    if h <= alto or entrelazado or bits != 8 or not canales:
+        return data
+    otros, idat, i = [], b'', 8
+    while i < len(data):
+        n = int.from_bytes(data[i:i + 4], 'big')
+        tipo, cuerpo = data[i + 4:i + 8], data[i + 8:i + 8 + n]
+        if tipo == b'IDAT':
+            idat += cuerpo
+        elif tipo not in (b'IHDR', b'IEND'):
+            otros.append((tipo, cuerpo))
+        i += 12 + n
+    filas = zlib.decompress(idat)[:alto * (w * canales + 1)]
+    trozo = lambda t, c: len(c).to_bytes(4, 'big') + t + c + zlib.crc32(t + c).to_bytes(4, 'big')
+    ihdr = data[16:20] + alto.to_bytes(4, 'big') + data[24:29]
+    return (data[:8] + trozo(b'IHDR', ihdr) + b''.join(trozo(t, c) for t, c in otros)
+            + trozo(b'IDAT', zlib.compress(filas, 6)) + trozo(b'IEND', b''))
+
+
+def recortar(svg, x=0, y=0, ancho=None, alto=None, salida=None, max_lado=None, timeout=None):
     chrome = chrome_bin()
     if not chrome:
-        raise MdjError('No encontre Google Chrome')
+        raise MdjError('No encontre Chrome, Chromium ni Edge: instala uno o define STARUML_MCP_CHROME_BIN')
+    timeout = timeout or _timeout('STARUML_MCP_CHROME_TIMEOUT', 30)
     svg = os.path.abspath(os.path.expanduser(svg))
+    if not os.path.exists(svg):
+        raise MdjError(f'No existe el SVG: {svg}')
     W, H = _svg_size(svg)
     ancho = int(ancho or (W - x if W else 1200)); alto = int(alto or (H - y if H else 800))
+    if ancho <= 0 or alto <= 0:
+        raise MdjError('La region pedida queda fuera del SVG')
+    # max_lado se logra escalando en el navegador (el SVG es vectorial: la imagen queda nitida)
+    escala = min(1.0, max_lado / max(ancho, alto)) if max_lado else 1.0
+    vw, vh = max(1, round(ancho * escala)), max(1, round(alto * escala))
     tmp = tempfile.mkdtemp(prefix='staruml_mcp_')
     prof = os.path.join(tmp, 'perfil_' + uuid.uuid4().hex[:8])
     html = os.path.join(tmp, 'r.html')
     png = os.path.join(tmp, 'out.png')
-    url = 'file://' + quote(svg)
-    with open(html, 'w') as f:
-        f.write(f"<html><body style='margin:0;overflow:hidden;background:#fff'>"
-                f"<img src='{url}' style='position:absolute;left:-{int(x)}px;top:-{int(y)}px'></body></html>")
-    p = subprocess.Popen([chrome, '--headless=new', '--disable-gpu', f'--user-data-dir={prof}', f'--screenshot={png}',
-                          f'--window-size={ancho},{alto}', '--hide-scrollbars', 'file://' + html],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    t0 = time.time()
     try:
-        while time.time() - t0 < timeout:
-            if os.path.exists(png) and os.path.getsize(png) > 0:
-                time.sleep(0.4); break
-            time.sleep(0.3)
-    finally:
-        p.terminate()
+        with open(html, 'w', encoding='utf-8') as f:
+            f.write(f"<html><body style='margin:0;overflow:hidden;background:#fff'>"
+                    f"<div style='position:absolute;left:0;top:0;transform:scale({escala});transform-origin:0 0'>"
+                    f"<img src='{pathlib.Path(svg).as_uri()}' style='position:absolute;left:{-int(x)}px;top:{-int(y)}px'>"
+                    f"</div></body></html>")
+        # en modo headless el area visible es mas baja que la ventana (87 px en Chromium 14x): se pide una ventana
+        # mas alta y la imagen se corta a la medida exacta
+        cmd = [chrome, '--headless=new', '--disable-gpu', f'--user-data-dir={prof}', f'--screenshot={png}',
+               f'--window-size={vw},{vh + 200}', '--hide-scrollbars', '--no-first-run', '--no-default-browser-check']
+        if hasattr(os, 'geteuid') and os.geteuid() == 0:
+            cmd.append('--no-sandbox')  # Chrome no arranca como root sin esto (contenedores, CI)
+        p = subprocess.Popen(cmd + [pathlib.Path(html).as_uri()], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        t0 = time.time()
         try:
-            p.wait(5)
-        except Exception:
-            p.kill()
-        subprocess.run(['pkill', '-f', prof], capture_output=True)
-    if not os.path.exists(png) or os.path.getsize(png) == 0:
+            while time.time() - t0 < timeout and p.poll() is None:
+                if os.path.exists(png) and os.path.getsize(png) > 0:
+                    time.sleep(0.4)
+                    break
+                time.sleep(0.2)
+        finally:
+            if p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(5)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+            if shutil.which('pkill'):
+                subprocess.run(['pkill', '-f', prof], capture_output=True)
+        if not os.path.exists(png) or os.path.getsize(png) == 0:
+            raise MdjError('Chrome no genero la imagen')
+        with open(png, 'rb') as f:
+            data = _png_primeras_filas(f.read(), vh)
+        destino = None
+        if salida:
+            destino = os.path.abspath(os.path.expanduser(salida))
+            os.makedirs(os.path.dirname(destino), exist_ok=True)
+            with open(destino, 'wb') as f:
+                f.write(data)
+    finally:
         shutil.rmtree(tmp, ignore_errors=True)
-        raise MdjError('Chrome no genero la imagen')
-    if max_lado:
-        subprocess.run(['sips', '-Z', str(int(max_lado)), png], capture_output=True)
-    destino = None
-    if salida:
-        destino = os.path.abspath(os.path.expanduser(salida))
-        os.makedirs(os.path.dirname(destino), exist_ok=True)
-        shutil.copy2(png, destino)
-    with open(png, 'rb') as f:
-        data = f.read()
-    shutil.rmtree(tmp, ignore_errors=True)
     return {'png': data, 'salida': destino, 'region': [int(x), int(y), ancho, alto], 'tamano_svg': [W, H]}
 
 
 def ver_visual(mdj, diagrama, salida=None, max_lado=1600, formato='png', forzar=False):
     """Genera una imagen visual PNG de alta fidelidad del diagrama indicado,
     optimizada para inspeccion visual e IA multimodal."""
+    mdj = os.path.abspath(os.path.expanduser(mdj))
     doc = Doc(mdj)
     dg = doc.diagram(diagrama)
-    dg_nombre = dg['name']
-    
-    # Directorio de cache para renders
-    cache_dir = os.path.join(tempfile.gettempdir(), 'staruml_mcp_renders')
-    os.makedirs(cache_dir, exist_ok=True)
-    svg_esperado = os.path.join(cache_dir, f"{dg_nombre}.svg")
-    
-    # Si el diagrama ya tiene un SVG exportado en la carpeta del mdj o pruebas/renders, usarlo
-    mdj_dir = os.path.dirname(os.path.abspath(os.path.expanduser(mdj)))
-    posibles_svg = [
-        os.path.join(mdj_dir, 'renders', f"{dg_nombre}.svg"),
-        os.path.join(mdj_dir, f"{dg_nombre}.svg"),
-        svg_esperado
-    ]
-    svg_existente = next((p for p in posibles_svg if os.path.exists(p)), None)
-    
-    mdj_mtime = os.path.getmtime(os.path.abspath(os.path.expanduser(mdj)))
-    necesita_exportar = forzar or (not svg_existente) or (os.path.getmtime(svg_existente) < mdj_mtime)
-    
-    if necesita_exportar:
-        exportar(mdj, cache_dir, dg_nombre, formato='svg')
-        if os.path.exists(svg_esperado):
-            svg_origen = svg_esperado
-        else:
-            candidatos = glob.glob(os.path.join(cache_dir, '*.svg'))
-            svg_origen = max(candidatos, key=os.path.getmtime) if candidatos else None
-    else:
-        svg_origen = svg_existente
-        
-    if not svg_origen or not os.path.exists(svg_origen):
-        raise MdjError(f'No se pudo obtener el SVG para el diagrama "{dg_nombre}"')
-        
-    # Rasterizar con Chrome headless
+    dg_nombre = dg.get('name') or ''
+    # cache propia de cada proyecto y diagrama (ruta del .mdj + id): dos proyectos con un diagrama homonimo no se pisan
+    clave = hashlib.sha1(f'{mdj}|{dg["_id"]}'.encode('utf-8')).hexdigest()[:16]
+    cache_dir = os.path.join(tempfile.gettempdir(), 'staruml_mcp_renders', clave)
+    svg_cache = os.path.join(cache_dir, 'diagrama.svg')
+    mdj_mtime = os.path.getmtime(mdj)
+    # un SVG exportado a mano junto al .mdj solo sirve si ese nombre de diagrama es unico en el proyecto
+    posibles = [svg_cache]
+    if sum(1 for d in doc.diagrams() if d.get('name') == dg_nombre) == 1:
+        mdj_dir = os.path.dirname(mdj)
+        posibles = [os.path.join(mdj_dir, 'renders', f'{_nombre_archivo(dg_nombre)}.svg'),
+                    os.path.join(mdj_dir, f'{_nombre_archivo(dg_nombre)}.svg'), svg_cache]
+    svg_origen = next((p for p in posibles if os.path.exists(p) and os.path.getmtime(p) >= mdj_mtime), None)
+    if forzar or svg_origen is None:
+        os.makedirs(cache_dir, exist_ok=True)
+        r = exportar(mdj, cache_dir, dg['_id'], formato='svg')
+        os.replace(r['archivos'][0], svg_cache)
+        svg_origen = svg_cache
+
     res_crop = recortar(svg_origen, salida=salida, max_lado=max_lado)
-    
-    # Metadata del diagrama
+
     resumen_elementos = []
     if dg.get('_type') == 'UMLClassDiagram':
         for v in dg.get('ownedViews', []):
             m = v.get('model')
             if isinstance(m, dict) and '$ref' in m and m['$ref'] in doc.ids:
                 el = doc.ids[m['$ref']]
-                if el.get('_type') in ('UMLClass', 'UMLActor', 'UMLInterface'):
+                if el and el.get('_type') in ('UMLClass', 'UMLActor', 'UMLInterface'):
                     resumen_elementos.append(f"{el.get('name')} ({doc.kind(el)})")
     elif dg.get('_type') == 'UMLSequenceDiagram':
         import staruml_mdj as M
         sec = M.secuencia(doc, dg['_id'])
         resumen_elementos = [f"Lifeline: {lf}" for lf in sec.get('lifelines', [])]
-        
+
     return {
         'diagrama': dg_nombre,
         'tipo': dg['_type'],
@@ -297,4 +405,3 @@ def ver_visual(mdj, diagrama, salida=None, max_lado=1600, formato='png', forzar=
         'vistas': len(dg.get('ownedViews', [])),
         'elementos': resumen_elementos[:35]
     }
-

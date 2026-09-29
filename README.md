@@ -9,7 +9,7 @@ Desarrollado en Python puro (3.9+), sin dependencias externas pesadas, comunicá
 ## Características Principales
 
 - **Inspección Visual en Tiempo Real:** Renderiza y entrega diagramas directamente en el chat en formato PNG de alta fidelidad para visión multimodal de la IA.
-- **Sincronización Bidireccional con Código:** Compara diagramas (Clases y Secuencias) contra bases de código en **Java, Python, TypeScript/JavaScript y C#**, calculando el porcentaje de alineación y reportando discrepancias.
+- **Sincronización Bidireccional con Código:** Compara diagramas (Clases y Secuencias) contra bases de código en **Java, Python, TypeScript/JavaScript y C#**, calculando el porcentaje de alineación (atributos, tipos, métodos, asociaciones con su multiplicidad y flujo de llamadas) y reportando discrepancias.
 - **Generación de Código:** Genera esqueletos limpios y tipados a partir del diseño de clases y asociaciones.
 - **Ingeniería Inversa:** Importa clases, atributos y métodos desde código fuente hacia paquetes y diagramas del `.mdj`.
 - **Edición Segura y Confiable:** Respaldos automáticos antes de escribir, prevención de sobreescritura si la aplicación está abierta y validación de integridad referencial.
@@ -56,12 +56,27 @@ Agrega la configuración en tu archivo `claude_desktop_config.json`:
 ### Requisitos del Sistema
 
 - **Python 3.9** o superior.
-- **StarUML** instalado (macOS en `~/Applications` o `/Applications`, o comando `staruml` disponible en `PATH`), necesario para la exportación por CLI.
-- **Google Chrome** (opcional, para rasterizado y recorte PNG de alta fidelidad).
+- **StarUML** instalado, necesario para la exportación por CLI. Se busca en `STARUML_MCP_STARUML_BIN`, en las rutas típicas de macOS (`~/Applications`, `/Applications`), Windows (`Program Files`, `%LOCALAPPDATA%\Programs`) y Linux (`/opt/StarUML`), y en el `PATH` (`staruml`).
+- **Google Chrome, Chromium o Edge** (opcional, para rasterizar y recortar PNG). Se busca en `STARUML_MCP_CHROME_BIN`, en las rutas típicas y en el `PATH`.
+- Funciona en **macOS, Linux y Windows** (la entrada y salida del protocolo es siempre UTF-8).
+
+### Variables de Entorno (opcionales)
+
+| Variable | Default | Uso |
+|---|---|---|
+| `STARUML_MCP_BACKUP_DIR` | `<carpeta del servidor>/respaldos` | Carpeta de respaldos. |
+| `STARUML_MCP_BACKUP_KEEP` | `100` | Respaldos que se conservan por archivo (`0` = todos). |
+| `STARUML_MCP_STARUML_BIN` | — | Ruta del ejecutable de StarUML. |
+| `STARUML_MCP_CHROME_BIN` | — | Ruta de Chrome/Chromium/Edge. |
+| `STARUML_MCP_EXPORT_TIMEOUT` | `150` | Segundos máximos de una exportación por CLI. |
+| `STARUML_MCP_CHROME_TIMEOUT` | `30` | Segundos máximos de un rasterizado con Chrome. |
+| `STARUML_MCP_ALLOWED_DIRS` | — | Carpetas permitidas, separadas por `:` (`;` en Windows). Si se define, ninguna ruta de lectura o escritura puede quedar fuera. |
+
+Las rutas relativas de `salida`, `carpeta`, `carpeta_salida` y `ruta_codigo` se resuelven desde la carpeta del `.mdj`.
 
 ---
 
-## Catálogo de Herramientas (30)
+## Catálogo de Herramientas (32)
 
 ### Inspección Visual y Renderizado
 | Herramienta | Descripción |
@@ -88,20 +103,22 @@ Agrega la configuración en tu archivo `claude_desktop_config.json`:
 | `mdj_secuencia` | Extrae la secuencia ordenada de mensajes, lifelines, tipos y respuestas (replies). |
 | `mdj_geometria` | Coordenadas, dimensiones e identificadores de vistas de cajas y líneas de un diagrama. |
 | `mdj_buscar` | Búsqueda flexible de elementos por nombre, texto o tipo UML (`UMLClass`, `UMLAssociation`, etc.). |
-| `mdj_validar` | Valida integridad estructural (IDs duplicados, referencias rotas) y reglas OOSE/robustez. |
+| `mdj_validar` | Valida integridad estructural (IDs duplicados, referencias rotas) y reglas OOSE/robustez, notación de íconos, estereotipos guardados como texto y cajas encimadas. |
 | `mdj_diff` | Calcula diferencias semánticas y estructurales entre dos archivos `.mdj`. |
 
 ### Edición Segura del Modelo
 | Herramienta | Descripción |
 |---|---|
 | `mdj_respaldar` | Crea una copia de respaldo verificada byte por byte. |
-| `mdj_clase_crear` | Crea clases o actores con estereotipo (`boundary`, `control`, `entity`), atributos y documentación. |
+| `mdj_clase_crear` | Crea clases con estereotipo (`boundary`, `control`, `entity`) o actores (`estereotipo: "actor"`), con atributos y documentación. |
+| `mdj_paquete_crear` | Crea un paquete dentro del modelo o de otro paquete. |
+| `mdj_diagrama_crear` | Crea un diagrama vacío de clases, casos de uso o secuencia (con su colaboración, interacción y marco), opcionalmente como el que abre por defecto. |
 | `mdj_renombrar` | Renombra un elemento y sincroniza automáticamente las etiquetas de todas sus vistas. |
 | `mdj_documentacion` | Actualiza la documentación o especificación de responsabilidades de un elemento. |
 | `mdj_atributos` | Sincroniza la lista exacta de atributos y actualiza su compartimento visual. |
 | `mdj_asociacion_crear` | Crea asociaciones con multiplicidades, roles, navegabilidad y trazado de ruta visual opcional. |
 | `mdj_asociacion_editar` | Modifica multiplicidades, roles, extremos o navegabilidad de una asociación existente. |
-| `mdj_borrar` | Borrado en cascada: elimina el elemento, sus elementos contenidos, relaciones y vistas asociadas. |
+| `mdj_borrar` | Borrado en cascada: elimina el elemento, sus elementos contenidos, relaciones y vistas asociadas (y lo quita de las listas de referencias, como `constrainedElements`). |
 | `mdj_vista_agregar` | Dibuja la vista de una clase o actor existente en un diagrama en notación estándar o icónica. |
 | `mdj_vista_mover` | Ajusta coordenadas y dimensiones de una vista de caja en un diagrama. |
 | `mdj_linea_ruta` | Define los puntos de quiebre de una línea calculando los extremos de conexión con las cajas. |
@@ -184,5 +201,21 @@ Para prevenir corrupción accidental de archivos:
 - `server.py`: Servidor central MCP (protocolo JSON-RPC 2.0 y registro de herramientas).
 - `staruml_mdj.py`: Motor de lectura, manipulación del árbol JSON, validación y edición segura del formato `.mdj`.
 - `staruml_render.py`: Módulo de exportación CLI, rasterizado de alta calidad e inspección de SVG.
-- `staruml_compare.py`: Motor de sincronización, escaneo de código fuente (Java, Python, TypeScript, C#) e ingeniería inversa.
+- `staruml_compare.py`: Motor de sincronización, escaneo de código fuente (Java, Python, TypeScript/JavaScript, C#) e ingeniería inversa.
 - `reglas.md`: Manual de convenciones de arquitectura, buenas prácticas OOSE y lineamientos de modelado.
+- `tests/`: Suite de pruebas (pytest) con modelos `.mdj` sintéticos.
+- `PLAN_DE_MEJORA.md`: Hallazgos de las pruebas y estado del plan de mejora.
+
+---
+
+## Pruebas
+
+```bash
+python -m pip install pytest
+python -m pytest tests -q
+```
+
+- Sin StarUML ni Chrome las pruebas que los necesitan se omiten solas; la exportación se prueba con un CLI de StarUML simulado (`tests/staruml_falso.py`).
+- Si están `javac` y `tsc`, se compila de verdad el código generado; el de Python siempre se importa.
+- **Modelo real propio:** copia tu `.mdj` a `pruebas/` (carpeta ignorada por git) o define `STARUML_MCP_MODELO_REAL`; `tests/test_modelo_real.py` lo usa automáticamente (siempre sobre copias).
+- La integración continua (`.github/workflows/pruebas.yml`) corre la suite en macOS, Linux y Windows con Python 3.9 y 3.12.
