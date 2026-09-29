@@ -8,7 +8,7 @@ import sys
 import pytest
 
 import staruml_compare as C
-from apoyo import M, fuentes, guardar_json, ids_integros, modelo_dominio, ok, proyecto_vacio, tool
+from apoyo import M, compilar_csharp, fuentes, guardar_json, ids_integros, modelo_dominio, ok, proyecto_vacio, tool
 
 
 def compilar(lenguaje, carpeta):
@@ -24,6 +24,11 @@ def compilar(lenguaje, carpeta):
             pytest.skip('sin tsc')
         r = subprocess.run([shutil.which('tsc'), '--noEmit', '--strict', '--target', 'es2020'] + archivos, capture_output=True, text=True)
         return r.returncode == 0, r.stdout[-800:]
+    if lenguaje == 'csharp':
+        r = compilar_csharp(carpeta, carpeta + '_proyecto')
+        if r is None:
+            pytest.skip('sin SDK de .NET')
+        return r
     malos = [(f, r.stderr[-300:]) for f in archivos
              for r in [subprocess.run([sys.executable, f], capture_output=True, text=True, cwd=carpeta)] if r.returncode]
     return not malos, str(malos)
@@ -43,6 +48,47 @@ def test_comparar_clases_completo(dominio, tmp_path):
     assert r['porcentaje_sincronizacion'] == 100.0
     assert r['actores_omitidos'] == ['Usuario'] and r['clases_faltantes_en_codigo'] == []
 
+
+
+@pytest.mark.parametrize('archivo,src', [
+    ('Dominio.kt', '''
+        package dominio
+        class Direccion(val calle: String)
+        open class Cliente(var nombre: String, var email: String?) {
+            var direccion: Direccion? = null
+            val pedidos: MutableList<Pedido> = mutableListOf()
+        }
+        class Pedido {
+            var total: Double = 0.0
+            val items = mutableListOf<Item>()
+            fun calcularTotal(): Double = items.sumOf { it.cantidad.toDouble() }
+        }
+        data class Item(val cantidad: Int)
+        class ClienteVIP(nombre: String, email: String?, val descuento: Double) : Cliente(nombre, email)'''),
+    ('dominio.go', '''
+        package dominio
+        type Direccion struct{ Calle string }
+        type Cliente struct {
+            Nombre, Email string
+            Direccion     *Direccion
+            Pedidos       []*Pedido
+        }
+        type Pedido struct {
+            Total float64
+            Items []Item
+        }
+        func (p *Pedido) CalcularTotal() float64 { return p.Total }
+        type Item struct{ Cantidad int }
+        type ClienteVIP struct {
+            Cliente
+            Descuento float64
+        }'''),
+])
+def test_comparar_kotlin_y_go_al_100(dominio, tmp_path, archivo, src):
+    carpeta = fuentes(str(tmp_path / 'src'), {archivo: src})
+    r = ok(tool('staruml_comparar_codigo', archivo=dominio, diagrama='cu_1', ruta_codigo=carpeta))
+    assert r['porcentaje_sincronizacion'] == 100.0, r['detalles_por_clase']
+    assert r['clases_faltantes_en_codigo'] == []
 
 def test_comparar_detecta_faltantes_tipos_y_multiplicidad(dominio, tmp_path):
     src = fuentes(str(tmp_path / 'src'), {'Cliente.java': '''
@@ -109,7 +155,7 @@ def test_comparar_secuencia_metricas(tmp_path):
 
 # --- generar ---
 
-@pytest.mark.parametrize('lenguaje', ['java', 'python', 'typescript'])
+@pytest.mark.parametrize('lenguaje', ['java', 'python', 'typescript', 'csharp'])
 def test_generar_compila_y_vuelve_al_100(dominio, tmp_path, lenguaje):
     out = str(tmp_path / lenguaje)
     r = ok(tool('staruml_diagrama_a_codigo', archivo=dominio, diagrama='cu_1', lenguaje=lenguaje, carpeta_salida=out))
@@ -167,6 +213,24 @@ def test_generar_identificadores_y_roles():
     src = C._generar_clase_java(c, {'Orden de Compra': c, 'Sesion': {'tipo': 'UMLClass'}})
     assert 'public class OrdenDeCompra' in src and 'private LocalDate fechaDeEntrega;' in src
     assert 'private List<Sesion> sesiones = new ArrayList<>();' in src and 'sesioness' not in src
+
+
+def test_generar_csharp_convenciones():
+    c = {'nombre': 'Orden de Compra', 'tipo': 'UMLClass', 'documentacion': 'Orden <principal>',
+         'atributos': [{'nombre': 'fecha de entrega', 'tipo': 'Date'}, {'nombre': 'orden de compra', 'tipo': 'int'},
+                       {'nombre': 'event', 'tipo': 'String'}, {'nombre': 'etiquetas', 'tipo': 'Set<String>'},
+                       {'nombre': 'precios', 'tipo': 'Map<String,double>'}],
+         'metodos': [{'nombre': 'calcular total', 'retorno': 'double', 'parametros': [{'nombre': 'con iva', 'tipo': 'boolean'}]}],
+         'asociaciones': [{'origen': 'Orden de Compra', 'destino': 'Sesion', 'mult_destino': '0..*', 'navegable': True}]}
+    src = C._generar_clase_csharp(c, {'Orden de Compra': c, 'Sesion': {'tipo': 'UMLClass'}}, C._espacio_cs('app.dominio'))
+    assert 'namespace App.Dominio' in src and 'public class OrdenDeCompra' in src
+    assert 'public DateTime FechaDeEntrega { get; set; }' in src
+    assert 'public int OrdenDeCompra_ { get; set; }' in src  # no puede llamarse como la clase
+    assert 'public string Event_ { get; set; }' in src
+    assert 'public HashSet<string> Etiquetas' in src and 'public Dictionary<string, double> Precios' in src
+    assert 'public List<Sesion> Sesions { get; set; } = new List<Sesion>();' in src
+    assert 'public double CalcularTotal(bool conIva)' in src and '/// Orden &lt;principal&gt;' in src
+    assert 'namespace' not in C._generar_clase_csharp(c, {}, '')
 
 
 # --- importar ---

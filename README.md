@@ -9,7 +9,7 @@ Desarrollado en Python puro (3.9+), sin dependencias externas pesadas, comunicá
 ## Características Principales
 
 - **Inspección Visual en Tiempo Real:** Renderiza y entrega diagramas directamente en el chat en formato PNG de alta fidelidad para visión multimodal de la IA.
-- **Sincronización Bidireccional con Código:** Compara diagramas (Clases y Secuencias) contra bases de código en **Java, Python, TypeScript/JavaScript y C#**, calculando el porcentaje de alineación (atributos, tipos, métodos, asociaciones con su multiplicidad y flujo de llamadas) y reportando discrepancias.
+- **Sincronización Bidireccional con Código:** Compara diagramas (Clases y Secuencias) contra bases de código en **Java, Python, TypeScript/JavaScript, C#, Kotlin y Go**, calculando el porcentaje de alineación (atributos, tipos, métodos, asociaciones con su multiplicidad y flujo de llamadas) y reportando discrepancias.
 - **Generación de Código:** Genera esqueletos limpios y tipados a partir del diseño de clases y asociaciones.
 - **Ingeniería Inversa:** Importa clases, atributos y métodos desde código fuente hacia paquetes y diagramas del `.mdj`.
 - **Edición Segura y Confiable:** Respaldos automáticos antes de escribir, prevención de sobreescritura si la aplicación está abierta y validación de integridad referencial.
@@ -90,9 +90,9 @@ Las rutas relativas de `salida`, `carpeta`, `carpeta_salida` y `ruta_codigo` se 
 ### Sincronización e Integración con Código
 | Herramienta | Descripción |
 |---|---|
-| `staruml_comparar_codigo` | Compara un diagrama (Clases o Secuencia) contra código fuente (Java, Python, TS, C#). Devuelve métrica de sincronización (%) y elementos faltantes. |
-| `staruml_diagrama_a_codigo` | Genera esqueletos de código limpios y tipados a partir de las clases y relaciones de un diagrama. No reemplaza archivos existentes salvo con `sobrescribir: true`. |
-| `staruml_codigo_a_diagrama` | Importa clases y atributos desde archivos de código fuente hacia el modelo y diagrama `.mdj`. Por defecto solo agrega; con `modo: "sincronizar"` deja exactamente los atributos del código y reporta los quitados. |
+| `staruml_comparar_codigo` | Compara un diagrama (Clases o Secuencia) contra código fuente (Java, Python, TS/JS, C#, Kotlin, Go). Devuelve métrica de sincronización (%) y elementos faltantes. |
+| `staruml_diagrama_a_codigo` | Genera esqueletos de código limpios y tipados (Java, Python, TypeScript, C#) a partir de las clases y relaciones de un diagrama. No reemplaza archivos existentes salvo con `sobrescribir: true`. |
+| `staruml_codigo_a_diagrama` | Importa clases, interfaces, enumeraciones, atributos y métodos desde código fuente (los mismos lenguajes que la comparación) hacia el modelo y diagrama `.mdj`. Por defecto solo agrega; con `modo: "sincronizar"` deja exactamente los atributos del código y reporta los quitados. |
 
 ### Lectura, Consulta y Diagnóstico
 | Herramienta | Descripción |
@@ -202,7 +202,7 @@ Para prevenir corrupción accidental de archivos:
 - `server.py`: Servidor central MCP (protocolo JSON-RPC 2.0 y registro de herramientas).
 - `staruml_mdj.py`: Motor de lectura, manipulación del árbol JSON, validación y edición segura del formato `.mdj`.
 - `staruml_render.py`: Módulo de exportación CLI, rasterizado de alta calidad e inspección de SVG.
-- `staruml_compare.py`: Motor de sincronización, escaneo de código fuente (Java, Python, TypeScript/JavaScript, C#) e ingeniería inversa.
+- `staruml_compare.py`: Motor de sincronización, escaneo de código fuente (Java, Python, TypeScript/JavaScript, C#, Kotlin, Go) e ingeniería inversa.
 - `reglas.md`: Manual de convenciones de arquitectura, buenas prácticas OOSE y lineamientos de modelado.
 - `tests/`: Suite de pruebas (pytest) con modelos `.mdj` sintéticos.
 - `PLAN_DE_MEJORA.md`: Hallazgos de las pruebas y estado del plan de mejora.

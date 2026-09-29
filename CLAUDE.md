@@ -8,7 +8,7 @@ Este documento proporciona el contexto completo del repositorio, arquitectura, h
 
 **MCP StarUML** es un servidor Model Context Protocol (**MCP**) autónomo desarrollado en Python 3.9+ (sin frameworks pesados, basado en JSON-RPC 2.0 por `stdio`) que permite a asistentes de IA interactuar con proyectos StarUML (`.mdj`) sin abrir la interfaz gráfica:
 - **Inspección visual:** Exporta diagramas a imágenes PNG de alta fidelidad y las entrega directamente en el protocolo MCP (`staruml_ver_visual`).
-- **Sincronización con código:** Compara diagramas de clases y de secuencia contra código fuente (**Java, Python, TypeScript/JavaScript y C#**), calculando porcentaje de alineación y reportando discrepancias (`staruml_comparar_codigo`).
+- **Sincronización con código:** Compara diagramas de clases y de secuencia contra código fuente (**Java, Python, TypeScript/JavaScript, C#, Kotlin y Go**), calculando porcentaje de alineación y reportando discrepancias (`staruml_comparar_codigo`).
 - **Ingeniería inversa y generación:** Genera esqueletos de código limpios a partir del modelo (`staruml_diagrama_a_codigo`) e importa código fuente a diagramas `.mdj` (`staruml_codigo_a_diagrama`).
 - **Edición segura:** Respaldos automáticos verificados byte a byte, prevención de sobreescritura si StarUML tiene el archivo abierto, y validación estricta de reglas OOSE (Boundary-Control-Entity).
 

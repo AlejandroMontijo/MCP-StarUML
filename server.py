@@ -242,25 +242,26 @@ def t_ver_visual(a):
 
 
 @tool('staruml_comparar_codigo', 'Compara exhaustivamente un diagrama UML (de clases o de secuencia) contra codigo fuente '
-      '(Java, Python, TypeScript, C#). Analiza clases, atributos, metodos, tipos, '
+      '(Java, Python, TypeScript/JavaScript, C#, Kotlin, Go). Analiza clases, atributos, metodos, tipos, '
       'asociaciones y llamadas de secuencia, calculando el porcentaje de alineacion y reportando discrepancias.',
       obj({'archivo': ARCHIVO, 'diagrama': S(description='Nombre o id del diagrama de clases o secuencia'),
            'ruta_codigo': S(description='Carpeta o archivo de codigo fuente a comparar'),
-           'lenguaje': S(enum=['auto', 'java', 'python', 'typescript', 'csharp'], description='Lenguaje (default auto)')},
+           'lenguaje': S(enum=['auto', 'java', 'python', 'typescript', 'csharp', 'kotlin', 'go'], description='Lenguaje (default auto)')},
           ['archivo', 'diagrama', 'ruta_codigo']), ro('Comparar con codigo'))
 def t_comparar_codigo(a):
     doc = M.Doc(a['archivo'])
     return C.comparar_diagrama_con_codigo(doc, a['diagrama'], a['ruta_codigo'], a.get('lenguaje', 'auto'))
 
 
-@tool('staruml_diagrama_a_codigo', 'Genera esqueletos de codigo limpios y tipados (Java, Python, TypeScript) listos para '
+@tool('staruml_diagrama_a_codigo', 'Genera esqueletos de codigo limpios y tipados (Java, Python, TypeScript, C#) listos para '
       'implementar a partir de las clases, atributos, metodos y asociaciones de un diagrama de clases del .mdj. '
       'No reemplaza archivos que ya existen en carpeta_salida salvo con sobrescribir=true.',
       obj({'archivo': ARCHIVO, 'diagrama': S(description='Nombre o id del diagrama de clases'),
-           'lenguaje': S(enum=['java', 'python', 'typescript'], description='Lenguaje de destino (default java)'),
+           'lenguaje': S(enum=['java', 'python', 'typescript', 'csharp'], description='Lenguaje de destino (default java)'),
            'carpeta_salida': S(description='Carpeta donde se guardaran los archivos de codigo generados'),
            'sobrescribir': B(description='Reemplazar los archivos que ya existan (default false: se omiten y se reportan)'),
-           'paquete_codigo': S(description='Paquete Java de los archivos generados (default "modelo"; vacio = sin paquete)')},
+           'paquete_codigo': S(description='Paquete Java o namespace C# de los archivos generados (default "modelo", en C# '
+                                           '"Modelo"; vacio = sin paquete)')},
           ['archivo', 'diagrama']), rw('Generar codigo', destructive=True))
 def t_diagrama_a_codigo(a):
     doc = M.Doc(a['archivo'])
@@ -269,12 +270,12 @@ def t_diagrama_a_codigo(a):
 
 
 @tool('staruml_codigo_a_diagrama', 'Importa clases e interfaces, atributos con su tipo y metodos desde codigo fuente (Java, '
-      'Python, TypeScript/JavaScript, C#) hacia un paquete del .mdj y, si se da diagrama, las dibuja sin encimarlas. '
+      'Python, TypeScript/JavaScript, C#, Kotlin, Go) hacia un paquete del .mdj y, si se da diagrama, las dibuja sin encimarlas. '
       'A boundary, control y entity no se les agregan metodos (analisis de robustez).',
       obj({'archivo': ARCHIVO, 'ruta_codigo': S(description='Carpeta o archivo de codigo fuente a importar'),
            'paquete': S(description='Nombre o id del paquete destino en el .mdj'),
            'diagrama': S(description='Opcional: nombre del diagrama de clases donde agregarlas visualmente'),
-           'lenguaje': S(enum=['auto', 'java', 'python', 'typescript', 'csharp']),
+           'lenguaje': S(enum=['auto', 'java', 'python', 'typescript', 'csharp', 'kotlin', 'go']),
            'modo': S(enum=['agregar', 'sincronizar'], description='agregar (default): solo agrega lo que falte; '
                                                                  'sincronizar: deja exactamente lo del codigo y reporta lo quitado'),
            'metodos': B(description='Importar tambien los metodos (default true)'),

@@ -4,6 +4,8 @@ import base64
 import glob
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -25,6 +27,35 @@ def nid():
 
 
 ref = M.ref
+
+
+def compilar_csharp(fuentes_dir, trabajo_dir):
+    """Compila los .cs de fuentes_dir con dotnet en un proyecto aparte (la carpeta de fuentes no se ensucia con bin/obj).
+    None si no hay SDK de .NET; si no, (ok, salida)."""
+    dotnet = shutil.which('dotnet')
+    if not dotnet:
+        return None
+    env = dict(os.environ, DOTNET_CLI_TELEMETRY_OPTOUT='1', DOTNET_NOLOGO='1', DOTNET_SKIP_FIRST_TIME_EXPERIENCE='1')
+    v = subprocess.run([dotnet, '--version'], capture_output=True, text=True, env=env)
+    m = re.match(r'(\d+)\.', v.stdout.strip())
+    if v.returncode or not m:
+        return None
+    os.makedirs(trabajo_dir, exist_ok=True)
+    fuentes = os.path.join(os.path.abspath(fuentes_dir), '*.cs').replace('\\', '/')
+    with open(os.path.join(trabajo_dir, 'Generado.csproj'), 'w', encoding='utf-8') as f:
+        f.write(f'''<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net{m.group(1)}.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NoWarn>CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup><Compile Include="{fuentes}" /></ItemGroup>
+</Project>
+''')
+    r = subprocess.run([dotnet, 'build', '-nologo', '-v', 'q'], capture_output=True, text=True, cwd=trabajo_dir, env=env)
+    return r.returncode == 0, (r.stdout + r.stderr)[-2000:]
 
 
 def proyecto_vacio(nombre='Fixture'):

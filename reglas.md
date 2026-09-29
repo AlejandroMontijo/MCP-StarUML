@@ -86,14 +86,20 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
 
 ## Inspección y sincronización con código
 
-- `staruml_comparar_codigo`: escanea código fuente (Java, Python, TypeScript, C#) y
+- `staruml_comparar_codigo`: escanea código fuente (Java, Python, TypeScript/JavaScript,
+  C#, Kotlin, Go) y
   compara contra las clases o secuencias del diagrama:
   - En clases: compara nombres, atributos, tipos de datos normalizados, métodos y
     asociaciones reflejadas como campos o colecciones (`List<T>`).
+  - Kotlin: las propiedades `val`/`var` del constructor primario cuentan como atributos;
+    `companion object` e `init` no. Go: los campos embebidos cuentan como herencia, los
+    métodos con receptor se asignan a su tipo y `type X int` con constantes `iota` es una
+    enumeración. Los archivos `_test.go` no se escanean.
   - En secuencias: verifica que las clases receptoras tengan implementado el método
     invocado y calcula el porcentaje de cobertura.
-- `staruml_diagrama_a_codigo`: genera esqueletos limpios y tipados con getters, setters
-  y atributos privados respetando el estándar del lenguaje.
+- `staruml_diagrama_a_codigo`: genera esqueletos limpios y tipados (Java, Python,
+  TypeScript, C#) respetando el estándar del lenguaje: getters y setters en Java,
+  dataclasses en Python, propiedades automáticas en PascalCase y `namespace` en C#.
 - `staruml_codigo_a_diagrama`: extrae clases desde código existente y las incorpora al
   paquete del `.mdj` con su correspondiente vista.
 

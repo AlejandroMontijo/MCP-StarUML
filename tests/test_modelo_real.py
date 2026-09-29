@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from apoyo import M, ids_integros, ok, tool
+from apoyo import M, compilar_csharp, ids_integros, ok, tool
 
 
 def diagramas(path, tipo):
@@ -101,7 +101,7 @@ def test_regenerar_cada_secuencia_con_su_propia_especificacion(real):
     assert ids_integros(real)
 
 
-@pytest.mark.parametrize('lenguaje', ['java', 'python', 'typescript'])
+@pytest.mark.parametrize('lenguaje', ['java', 'python', 'typescript', 'csharp'])
 def test_codigo_generado_del_diagrama_de_clases_compila_y_vuelve_al_100(real, tmp_path, lenguaje):
     clases = [d for d in diagramas(real, 'UMLClassDiagram') if d.get('ownedViews')]
     assert clases
@@ -116,6 +116,9 @@ def test_codigo_generado_del_diagrama_de_clases_compila_y_vuelve_al_100(real, tm
     elif lenguaje == 'typescript' and shutil.which('tsc'):
         cp = subprocess.run([shutil.which('tsc'), '--noEmit', '--strict', '--target', 'es2020'] + archivos, capture_output=True, text=True)
         assert cp.returncode == 0, cp.stdout[-1500:]
+    elif lenguaje == 'csharp':
+        cp = compilar_csharp(out, str(tmp_path / 'proyecto'))
+        assert cp is None or cp[0], cp[1]
     elif lenguaje == 'python':
         for f in archivos:
             cp = subprocess.run([sys.executable, f], capture_output=True, text=True, cwd=out)
