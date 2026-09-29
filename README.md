@@ -75,8 +75,8 @@ Agrega la configuración en tu archivo `claude_desktop_config.json`:
 | Herramienta | Descripción |
 |---|---|
 | `staruml_comparar_codigo` | Compara un diagrama (Clases o Secuencia) contra código fuente (Java, Python, TS, C#). Devuelve métrica de sincronización (%) y elementos faltantes. |
-| `staruml_diagrama_a_codigo` | Genera esqueletos de código limpios y tipados a partir de las clases y relaciones de un diagrama. |
-| `staruml_codigo_a_diagrama` | Importa clases, atributos y métodos desde archivos de código fuente hacia el modelo y diagrama `.mdj`. |
+| `staruml_diagrama_a_codigo` | Genera esqueletos de código limpios y tipados a partir de las clases y relaciones de un diagrama. No reemplaza archivos existentes salvo con `sobrescribir: true`. |
+| `staruml_codigo_a_diagrama` | Importa clases y atributos desde archivos de código fuente hacia el modelo y diagrama `.mdj`. Por defecto solo agrega; con `modo: "sincronizar"` deja exactamente los atributos del código y reporta los quitados. |
 
 ### Lectura, Consulta y Diagnóstico
 | Herramienta | Descripción |
@@ -115,11 +115,12 @@ Agrega la configuración en tu archivo `claude_desktop_config.json`:
 
 Para prevenir corrupción accidental de archivos:
 
-1. **Detección de Proceso Activo:** Las herramientas de escritura se niegan a modificar el archivo si StarUML lo tiene abierto, evitando sobreescrituras accidentales desde la interfaz gráfica. (Se puede omitir conscientemente mediante `forzar: true`).
+1. **Detección de Proceso Activo:** Las herramientas de escritura se niegan a modificar el archivo si la aplicación de StarUML está abierta (macOS, Linux o Windows) o si no se puede comprobar, evitando sobreescrituras accidentales desde la interfaz gráfica. (Se puede omitir conscientemente mediante `forzar: true`).
 2. **Respaldo Automático Previo:** Todo guardado genera un respaldo en la carpeta `respaldos/` (configurable mediante la variable de entorno `STARUML_MCP_BACKUP_DIR`) verificado byte a byte.
-3. **Formato Nativo:** Mantiene el formato idéntico al de StarUML (`ensure_ascii=False`, indentación por tabuladores).
-4. **Validación Posterior:** Al concluir la escritura, el archivo se revalida estructuralmente.
+3. **Formato Nativo:** Mantiene el formato idéntico al de StarUML (`ensure_ascii=False`, indentación por tabuladores, saltos de línea `\n` también en Windows).
+4. **Validación Previa:** Antes de escribir se revisa la integridad del modelo en memoria. Si el cambio dejaría ids duplicados, referencias colgantes, `_parent` incoherentes o números NaN/infinito, no se escribe nada.
 5. **Simulación con Archivo Alternativo:** Con el parámetro opcional `salida: "otro_archivo.mdj"`, los cambios se escriben en una copia sin alterar el archivo original.
+6. **Sin Pérdidas Silenciosas:** `staruml_codigo_a_diagrama` solo agrega atributos salvo con `modo: "sincronizar"`, `staruml_diagrama_a_codigo` no reemplaza archivos existentes salvo con `sobrescribir: true`, y `mdj_secuencia_generar` conserva las notas del diagrama. Lo que se omite, quita o descarta se reporta en la respuesta.
 
 ---
 

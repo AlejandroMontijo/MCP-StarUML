@@ -2,6 +2,8 @@
 
 > Resultado de una campaña de pruebas en busca de bugs sobre `main` (commit `6c118c2`, 2026-09-29) y de la revisión del plan v2.0 propuesto anteriormente. **Cada hallazgo de este documento se reprodujo**; ninguno es especulativo.
 
+> **Estado:** ✅ Fase 0 completada. Los 11 críticos ya no se reproducen, y de paso se corrigieron B05, B18 y P06 (detalle en §5). Quedan pendientes las Fases 1–3.
+
 ---
 
 ## 1. Resumen ejecutivo
@@ -162,16 +164,33 @@
 
 ## 5. Plan unificado
 
-### Fase 0: detener la pérdida de datos (bloqueante, 1–2 sesiones)
+### Fase 0: detener la pérdida de datos (bloqueante, 1–2 sesiones) — ✅ completada
 
 | # | Tarea | Cierra | Criterio de aceptación |
 |---|---|---|---|
-| 0.1 | **Guardado transaccional.** `Doc.save()` valida en memoria antes de escribir y se niega si el cambio introduce duplicados, colgantes o `_parent` incoherentes que no había al cargar. Usar `json.dump(..., allow_nan=False)` y rechazar `NaN`/`Infinity` en la entrada (`json.loads(line, parse_constant=…)`, capturando `ValueError`). | B11; convierte B01, B02 y B12 en errores limpios | El fuzzer con los disparadores activos no produce ningún archivo inválido. |
-| 0.2 | **Corregir las causas raíz.** `set_atributos` rechaza nombres repetidos. `generar_secuencia` asigna una lifeline por *clave* y nunca agrega dos veces el mismo objeto. `borrar` recorre también las referencias dentro de listas. | B01, B02, B12 | Test de regresión por caso. |
-| 0.3 | **Nada se pierde en silencio.** `mdj_secuencia_generar` conserva las notas o las reporta en `vistas_descartadas`. El importador trabaja en modo aditivo por defecto, con un `modo: "sincronizar"` explícito que informa `atributos_quitados`. El generador no sobrescribe sin `sobrescribir: true` y sanea los nombres de archivo, verificando con `os.path.commonpath` que el destino queda dentro de `carpeta_salida`. | B03, C23, C07, C08 | Tests de las cuatro situaciones. |
-| 0.4 | **Anotaciones MCP correctas.** Las herramientas que escriben llevan `readOnlyHint: false`, y el generador además `destructiveHint` cuando puede sobrescribir. | B18 | Test que recorre `TOOLS`: si una herramienta tiene un parámetro de salida, no puede ser read-only. |
-| 0.5 | **stdio en UTF-8 explícito**: al inicio de `main()`, `sys.stdin.reconfigure(encoding='utf-8')` y `sys.stdout.reconfigure(encoding='utf-8', newline='\n')`. | P05, P06 | El E2E pasa con `PYTHONIOENCODING=cp1252`. |
-| 0.6 | **La protección "StarUML abierto" falla cerrada.** Detección para macOS, Linux (`/opt/StarUML/staruml`, AppImage) y Windows (`tasklist`). Si no se puede determinar, no se escribe salvo con `forzar`. | P01, P02 | Tests con un proceso simulado y con `ps` ausente. |
+| 0.1 ✅ | **Guardado transaccional.** `Doc.save()` valida en memoria antes de escribir y se niega si el cambio introduce duplicados, colgantes o `_parent` incoherentes que no había al cargar. Usar `json.dump(..., allow_nan=False)` y rechazar `NaN`/`Infinity` en la entrada (`json.loads(line, parse_constant=…)`, capturando `ValueError`). | B11; convierte B01, B02 y B12 en errores limpios | El fuzzer con los disparadores activos no produce ningún archivo inválido. |
+| 0.2 ✅ | **Corregir las causas raíz.** `set_atributos` rechaza nombres repetidos. `generar_secuencia` asigna una lifeline por *clave* y nunca agrega dos veces el mismo objeto. `borrar` recorre también las referencias dentro de listas. | B01, B02, B12 | Test de regresión por caso. |
+| 0.3 ✅ | **Nada se pierde en silencio.** `mdj_secuencia_generar` conserva las notas o las reporta en `vistas_descartadas`. El importador trabaja en modo aditivo por defecto, con un `modo: "sincronizar"` explícito que informa `atributos_quitados`. El generador no sobrescribe sin `sobrescribir: true` y sanea los nombres de archivo, verificando con `os.path.commonpath` que el destino queda dentro de `carpeta_salida`. | B03, C23, C07, C08 | Tests de las cuatro situaciones. |
+| 0.4 ✅ | **Anotaciones MCP correctas.** Las herramientas que escriben llevan `readOnlyHint: false`, y el generador además `destructiveHint` cuando puede sobrescribir. | B18 | Test que recorre `TOOLS`: si una herramienta tiene un parámetro de salida, no puede ser read-only. |
+| 0.5 ✅ | **stdio en UTF-8 explícito**: al inicio de `main()`, `sys.stdin.reconfigure(encoding='utf-8')` y `sys.stdout.reconfigure(encoding='utf-8', newline='\n')`. | P05, P06 | El E2E pasa con `PYTHONIOENCODING=cp1252`. |
+| 0.6 ✅ | **La protección "StarUML abierto" falla cerrada.** Detección para macOS, Linux (`/opt/StarUML/staruml`, AppImage) y Windows (`tasklist`). Si no se puede determinar, no se escribe salvo con `forzar`. | P01, P02 | Tests con un proceso simulado y con `ps` ausente. |
+
+**Cómo quedó la Fase 0.**
+- **Comportamientos nuevos visibles para quien usa el MCP:**
+  - una escritura que empeoraría el `.mdj` se rechaza con un error que dice por qué;
+  - `mdj_atributos` y `mdj_clase_crear` rechazan nombres repetidos;
+  - `mdj_secuencia_generar` devuelve `vistas_conservadas` y `vistas_descartadas`;
+  - `mdj_borrar` devuelve `referencias_quitadas`;
+  - `staruml_codigo_a_diagrama` acepta `modo` y devuelve `atributos_agregados` y `atributos_quitados`;
+  - `staruml_diagrama_a_codigo` acepta `sobrescribir` y devuelve `escritos`, `omitidos_por_existir` y `omitidos_por_nombre_invalido`;
+  - si no se puede comprobar si StarUML está abierto, hace falta `forzar: true`.
+- **Encontrado al corregir:** en Windows el `.mdj` se escribía con saltos `\r\n`; ahora siempre usa `\n`, como StarUML.
+- **Verificación:**
+  - E2E 46/46;
+  - 30 pruebas nuevas de los comportamientos y sus bordes;
+  - fuzzer normal (827 operaciones) sin fallos;
+  - fuzzer con los disparadores de corrupción activos (475 operaciones): 31 rechazos limpios y ningún archivo inválido;
+  - en el modelo de 27 000 ids, la validación previa agrega ~0.1–0.3 s por escritura.
 
 ### Fase 1: red de seguridad y robustez (2–3 sesiones)
 Incorpora los puntos 1.1–1.4 del plan v2.0, ajustados.
@@ -217,10 +236,10 @@ Re-priorizadas desde el plan v2.0 y los hallazgos.
 
 | # | Tarea | Fase | Depende de |
 |---|---|---|---|
-| 1 | 0.1 Guardado transaccional + rechazo de NaN | F0 | — |
-| 2 | 0.2 Causas raíz B01, B02, B12 | F0 | — |
-| 3 | 0.3 Nada se pierde en silencio | F0 | — |
-| 4 | 0.4 Anotaciones + 0.5 UTF-8 + 0.6 protección fail-closed | F0 | — |
+| 1 | ✅ 0.1 Guardado transaccional + rechazo de NaN | F0 | — |
+| 2 | ✅ 0.2 Causas raíz B01, B02, B12 | F0 | — |
+| 3 | ✅ 0.3 Nada se pierde en silencio | F0 | — |
+| 4 | ✅ 0.4 Anotaciones + 0.5 UTF-8 + 0.6 protección fail-closed | F0 | — |
 | 5 | 1.1 pytest + 1.2 CI (tres sistemas operativos) | F1 | F0 (o en paralelo, empezando por las regresiones) |
 | 6 | 1.3 Crashes con datos mínimos | F1 | 1.1 |
 | 7 | 1.4 + 1.5 Render portable y caché | F1 | 1.2 |
@@ -239,8 +258,8 @@ Re-priorizadas desde el plan v2.0 y los hallazgos.
   - "o comando `staruml` disponible en PATH" no es cierto hoy (P03);
   - JavaScript no se escanea en carpetas (C17);
   - `mdj_clase_crear` no crea actores (B17);
-  - el importador no trae métodos (C24);
-  - "Validación posterior" debería pasar a "validación previa" cuando exista 0.1;
+  - ~~el importador no trae métodos (C24)~~ (corregido en el README con la Fase 0);
+  - ~~"Validación posterior" debería pasar a "validación previa"~~ (hecho con la Fase 0);
   - el soporte de Windows/Linux necesita una nota hasta completar 1.4.
 - **CLAUDE.md**: dice que se comparan "multiplicidades de asociaciones y flujo de llamadas en secuencias", y hoy no se hace ninguna de las dos (C21 y `llamadas` sin usar).
 - **Descripciones de herramientas**: `staruml_codigo_a_diagrama` dice "(Java, Python, TS)" pero su enum incluye `csharp`, y `forzar` significa cosas distintas en `staruml_ver_visual` y en las herramientas de edición.

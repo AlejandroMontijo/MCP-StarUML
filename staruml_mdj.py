@@ -1,7 +1,9 @@
 # Biblioteca para leer, validar y editar archivos .mdj de StarUML sin abrir la aplicacion.
 # Reglas de trabajo que respeta (ver reglas.md):
 #  - Guarda siempre con json.dump(d, f, ensure_ascii=False, indent='\t'), igual que StarUML.
-#  - Respalda antes de escribir y no escribe si la aplicacion de StarUML esta abierta.
+#  - Respalda antes de escribir y no escribe si la aplicacion de StarUML esta abierta (o si no se puede saber).
+#  - No escribe un cambio que deje el archivo peor de lo que estaba: ids duplicados, referencias colgantes,
+#    _parent incoherente o numeros NaN/infinito (StarUML ya no lo abriria).
 #  - IDs con el mismo formato de StarUML: 4 bytes cero + 6 bytes de timestamp en ms + 4 aleatorios, en base64.
 #  - StarUML recalcula el primer y ultimo punto de cada linea: queda donde la recta del centro de la caja
 #    hacia el punto vecino cruza el borde. Aqui se calcula igual (junction) para que el archivo quede limpio.
@@ -16,6 +18,7 @@ import re
 import shutil
 import subprocess
 import time
+from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BACKUP_DIR = os.environ.get('STARUML_MCP_BACKUP_DIR', os.path.join(HERE, 'respaldos'))
@@ -54,15 +57,34 @@ def chrome_bin():
     return None
 
 
-def staruml_gui_abierto():
-    """True si la aplicacion de StarUML (no una exportacion por CLI) esta corriendo."""
-    try:
-        out = subprocess.run(['ps', '-Ao', 'pid=,command='], capture_output=True, text=True, timeout=10).stdout
-    except Exception:
+def es_gui_staruml(cmd):
+    """True si la linea de comando es la aplicacion de StarUML: macOS (StarUML.app), Linux (/opt/StarUML/staruml,
+    AppImage). No cuentan las exportaciones por CLI (staruml image ...) ni los procesos auxiliares de Electron."""
+    m = re.search(r'(StarUML\.app/Contents/MacOS/StarUML|/staruml|StarUML[^/]*\.AppImage)(?=\s|$)(.*)$', cmd, re.I)
+    if not m:
         return False
-    for line in out.splitlines():
-        cmd = line.strip().split(None, 1)[1] if len(line.strip().split(None, 1)) > 1 else ''
-        if re.search(r'StarUML\.app/Contents/MacOS/StarUML(\s+-psn\S*)?\s*$', cmd):
+    args = m.group(2).split()
+    return not args or (args[0].lower() not in ('image', 'html', 'ejs', 'exec')
+                        and not any(a.startswith('--type=') for a in args))
+
+
+def staruml_gui_abierto():
+    """True si la aplicacion de StarUML (no una exportacion por CLI) esta corriendo, False si no, y None si no se
+    pudo averiguar (sin ps ni tasklist). Quien escribe trata None como abierto."""
+    try:
+        if os.name == 'nt':  # tasklist no da la linea de comando: cualquier StarUML.exe cuenta como abierto
+            r = subprocess.run(['tasklist', '/FO', 'CSV', '/NH'], capture_output=True, text=True, timeout=10)
+            if r.returncode:
+                return None
+            return any(l.lower().startswith('"staruml.exe"') for l in r.stdout.splitlines())
+        r = subprocess.run(['ps', '-Ao', 'pid=,command='], capture_output=True, text=True, timeout=10)
+    except Exception:
+        return None
+    if r.returncode:
+        return None
+    for line in r.stdout.splitlines():
+        partes = line.strip().split(None, 1)
+        if len(partes) > 1 and es_gui_staruml(partes[1]):
             return True
     return False
 
@@ -77,7 +99,8 @@ class Doc:
         if not os.path.exists(self.path):
             raise MdjError(f'No existe el archivo: {self.path}')
         with open(self.path, encoding='utf-8') as f:
-            self.d = json.load(f)
+            self._texto = f.read()  # estado al cargar: al guardar se compara contra el para no empeorar el archivo
+        self.d = json.loads(self._texto)
         self.reindex()
         self._ts = int(time.time() * 1000) - 600000
         self._rnd = random.Random()
@@ -196,25 +219,54 @@ class Doc:
     # --- guardado ---
     def save(self, out=None, backup=True, force=False):
         target = os.path.abspath(os.path.expanduser(out)) if out else self.path
-        if staruml_gui_abierto() and not force:
-            raise MdjError('StarUML esta abierto. Cierralo (sin guardar) antes de escribir el .mdj, '
-                           'o usa forzar=true si sabes que no tiene este archivo cargado.')
+        abierto = staruml_gui_abierto()
+        if abierto is not False and not force:
+            if abierto:
+                raise MdjError('StarUML esta abierto. Cierralo (sin guardar) antes de escribir el .mdj, '
+                               'o usa forzar=true si sabes que no tiene este archivo cargado.')
+            raise MdjError('No se pudo saber si StarUML esta abierto (no hay ps ni tasklist). '
+                           'Usa forzar=true si sabes que no tiene este archivo cargado.')
+        # se valida en memoria antes de tocar el disco: si el cambio empeora el archivo, no se escribe nada
+        nuevos = self.problemas_nuevos()
+        if nuevos:
+            raise MdjError('No se escribio nada: el cambio dejaria el .mdj inconsistente (' + '; '.join(nuevos) + ')')
+        try:
+            texto = json.dumps(self.d, ensure_ascii=False, indent='\t', allow_nan=False)
+        except ValueError:
+            raise MdjError('No se escribio nada: el modelo tiene numeros NaN o infinitos, que StarUML no puede leer') from None
         bk = None
         if backup and os.path.exists(target):
             bk = backup_file(target)
         # las entradas None del indice de ids nuevos no se guardan: solo sirven para no repetir ids
         tmp = target + '.tmp_mcp'
         try:
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(self.d, f, ensure_ascii=False, indent='\t')
+            with open(tmp, 'w', encoding='utf-8', newline='\n') as f:  # saltos \n como StarUML, tambien en Windows
+                f.write(texto)
             os.replace(tmp, target)
         except Exception:
             if os.path.exists(tmp):
                 os.remove(tmp)
             raise
         self.path = target
+        self._texto = texto
         self.reindex()
         return bk
+
+    def problemas_nuevos(self):
+        """Problemas de integridad del modelo en memoria que no estaban al cargarlo. Se comparan por id y no por
+        conteo, para que un archivo que ya venia con problemas se pueda seguir editando sin sumarle otros."""
+        _, dup, colg, mism = integridad(self.d)
+        if not (dup or colg or mism):
+            return []
+        _, dup0, colg0, mism0 = integridad(json.loads(self._texto))
+        res = []
+        for nombre, ahora, antes in (('ids duplicados', dup, dup0),
+                                     ('referencias colgantes', [r for r, _ in colg], [r for r, _ in colg0]),
+                                     ('_parent incoherente', [i for i, _ in mism], [i for i, _ in mism0])):
+            n = sorted(set((Counter(ahora) - Counter(antes)).elements()))
+            if n:
+                res.append(f'{nombre}: ' + ', '.join(n[:5]) + (f' y {len(n) - 5} mas' if len(n) > 5 else ''))
+        return res
 
 
 def backup_file(path, folder=None):
@@ -361,40 +413,39 @@ def buscar(doc, texto=None, tipo=None, limite=60):
 # Validacion
 # ---------------------------------------------------------------------------
 
-def validar(doc, oose=True):
-    dup, seen = [], set()
+def integridad(d):
+    """Un solo recorrido del arbol JSON: ids vistos, ids duplicados, referencias colgantes [(ref, ruta)] y
+    elementos cuyo _parent no es su contenedor real [(id, descripcion)]."""
+    seen, dup, refs, mism = set(), [], [], []
 
-    def walk(o):
+    def walk(o, p=None, path=''):
         if isinstance(o, dict):
+            if '$ref' in o and len(o) == 1:
+                refs.append((o['$ref'], path))
             if '_id' in o:
                 if o['_id'] in seen:
                     dup.append(o['_id'])
                 seen.add(o['_id'])
-            for v in o.values():
-                walk(v)
-        elif isinstance(o, list):
-            for v in o:
-                walk(v)
-    walk(doc.d)
-    refs = []
-
-    def wr(o, path=''):
-        if isinstance(o, dict):
-            if '$ref' in o and len(o) == 1:
-                refs.append((o['$ref'], path))
+                par = o.get('_parent')
+                if p is not None and isinstance(par, dict) and par.get('$ref') != p:
+                    mism.append((o['_id'], f"{o.get('_type')} {o.get('name', '')} {o['_id']}"))
+                p = o['_id']
             for k, v in o.items():
-                wr(v, path + '/' + k)
+                if isinstance(v, (dict, list)):
+                    walk(v, p, path + '/' + k)
         elif isinstance(o, list):
             for i, v in enumerate(o):
-                wr(v, path + f'[{i}]')
-    wr(doc.d)
-    colg = [(r, p[-100:]) for r, p in refs if r not in seen]
-    mism = []
-    for i, o in doc.ids.items():
-        if o and '_parent' in o and i in doc.parent and o['_parent'].get('$ref') != doc.parent[i]:
-            mism.append(f"{o['_type']} {o.get('name', '')} {i}")
+                if isinstance(v, (dict, list)):
+                    walk(v, p, path + f'[{i}]')
+    walk(d)
+    colg = [(r, pth[-100:]) for r, pth in refs if r not in seen]
+    return seen, dup, colg, mism
+
+
+def validar(doc, oose=True):
+    seen, dup, colg, mism = integridad(doc.d)
     res = {'ids': len(seen), 'duplicados': dup[:20], 'n_duplicados': len(dup), 'colgantes': colg[:20],
-           'n_colgantes': len(colg), 'parent_mismatch': mism[:20], 'n_parent_mismatch': len(mism)}
+           'n_colgantes': len(colg), 'parent_mismatch': [m for _, m in mism[:20]], 'n_parent_mismatch': len(mism)}
     if oose:
         res['oose'] = reglas_oose(doc)
     return res
@@ -622,6 +673,9 @@ def rehacer_atributos_vista(doc, v, cls):
 
 
 def set_atributos(doc, cls, nombres):
+    repetidos = sorted({n for n in nombres if nombres.count(n) > 1})
+    if repetidos:  # el mismo atributo quedaria dos veces en el archivo, con el mismo _id
+        raise MdjError(f'Atributos repetidos: {repetidos}')
     viejos = {a['name']: a for a in cls.get('attributes', [])}
     nuevos = []
     for n in nombres:
@@ -636,6 +690,19 @@ def set_atributos(doc, cls, nombres):
             acv[0]['subViews'] = [s for s in acv[0].get('subViews', []) if s.get('model', {}).get('$ref') not in ids_quitados]
         rehacer_atributos_vista(doc, v, cls)
     return quitados
+
+
+def agregar_atributos(doc, cls, nombres):
+    """Agrega los atributos que falten (por nombre) sin tocar ni quitar los que ya tiene la clase."""
+    existentes = {a.get('name') for a in cls.get('attributes', [])}
+    nuevos = [n for n in dict.fromkeys(nombres) if n not in existentes]
+    for n in nuevos:
+        cls.setdefault('attributes', []).append({'_type': 'UMLAttribute', '_id': doc.new_id(), '_parent': ref(cls['_id']),
+                                                 'name': n, 'type': ''})
+    if nuevos:
+        for _, v in doc.views_of(cls['_id']):
+            rehacer_atributos_vista(doc, v, cls)
+    return nuevos
 
 
 ARIAL11 = {**{c: 6.1 for c in 'abcdeghnopqusvxyz'}, **{c: 2.5 for c in 'ijl'}, **{c: 3.1 for c in 'ftr'},
@@ -982,20 +1049,25 @@ def borrar(doc, el):
                 poda(e)
     poda(doc.d)
     doc.reindex()
-    # lo que todavia apunta a algo borrado: los 'type' (roles de lifelines, atributos tipados) se vacian;
+    # lo que todavia apunta a algo borrado: los 'type' (roles de lifelines, atributos tipados) se vacian y las
+    # listas de referencias (constrainedElements, containedViews...) pierden esa entrada;
     # cualquier otra referencia es un problema y no se deja pasar
-    tipos_vaciados, colgantes = [], []
+    tipos_vaciados, colgantes, refs_quitadas = [], [], []
+    borrado = lambda x: isinstance(x, dict) and set(x) == {'$ref'} and (x['$ref'] in quitar or x['$ref'] in vistas)
 
     def revisa(o, path=''):
         if isinstance(o, dict):
             for k, x in list(o.items()):
-                if isinstance(x, dict) and set(x) == {'$ref'} and (x['$ref'] in quitar or x['$ref'] in vistas):
+                if borrado(x):
                     if k == 'type':
                         o[k] = ''
                         tipos_vaciados.append(f"{o.get('_type')} {o.get('name', '')}")
                     else:
                         colgantes.append(f"{o.get('_type')} {o.get('_id')} .{k}")
                 else:
+                    if isinstance(x, list) and any(borrado(e) for e in x):
+                        o[k] = x = [e for e in x if not borrado(e)]
+                        refs_quitadas.append(f"{o.get('_type')} {o.get('name', '')} .{k}")
                     revisa(x, path + '/' + k)
         elif isinstance(o, list):
             for x in o:
@@ -1003,7 +1075,8 @@ def borrar(doc, el):
     revisa(doc.d)
     if colgantes:
         raise MdjError('No se puede borrar sin dejar referencias colgantes: ' + '; '.join(colgantes[:8]))
-    return {'elementos_borrados': len(quitar), 'vistas_borradas': len(vistas), 'tipos_vaciados': tipos_vaciados}
+    return {'elementos_borrados': len(quitar), 'vistas_borradas': len(vistas), 'tipos_vaciados': tipos_vaciados,
+            'referencias_quitadas': refs_quitadas}
 
 
 # ---------------------------------------------------------------------------
@@ -1018,6 +1091,25 @@ AR13 = {**{c: 556 for c in 'abdeghnopqu0123456789'}, **{c: 500 for c in 'cksvxyz
 
 def ancho13(t):
     return sum(AR13.get(c, 556) for c in t) * 13 / 1000
+
+
+def _ids_y_refs(o):
+    """Ids definidos dentro de o, e ids a los que o hace referencia."""
+    ids, refs = set(), set()
+
+    def walk(x):
+        if isinstance(x, dict):
+            if '_id' in x:
+                ids.add(x['_id'])
+            if '$ref' in x and len(x) == 1:
+                refs.add(x['$ref'])
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+    walk(o)
+    return ids, refs
 
 
 def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
@@ -1051,25 +1143,33 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
         if m['de'] == m['a']:
             raise MdjError(f'El mensaje "{m["nombre"]}" va de una lifeline a si misma; el generador no dibuja auto-mensajes')
 
-    # roles y lifelines (se reusan si ya existen para ese tipo)
-    rol_de = {a['type']['$ref']: a for a in colab.get('attributes', []) if isinstance(a.get('type'), dict)}
-    ll_de = {l['represent']['$ref']: l for l in inter.get('participants', []) if l.get('represent')}
+    # roles y lifelines: se reusan los que ya existen para ese tipo (primero el rol que se llama como la clave),
+    # pero cada clave recibe los suyos: dos lifelines del mismo tipo nunca comparten rol ni objeto
+    roles_de, lls_de = {}, {}
+    for a in colab.get('attributes', []):
+        if isinstance(a.get('type'), dict):
+            roles_de.setdefault(a['type']['$ref'], []).append(a)
+    for l in inter.get('participants', []):
+        if l.get('represent'):
+            lls_de.setdefault(l['represent']['$ref'], []).append(l)
     viejos_ll = {l['_id'] for l in inter.get('participants', [])}
     roles_viejos = {l['represent']['$ref'] for l in inter.get('participants', []) if l.get('represent')}
-    lifeline, tipo_de, participantes = {}, {}, []
+    lifeline, tipo_de, participantes, asignados = {}, {}, [], set()
     for l in lifelines:
         t = doc.find(l['tipo'], types=('UMLClass', 'UMLActor', 'UMLInterface'))
         tipo_de[l['clave']] = t
-        rol = rol_de.get(t['_id'])
+        libres = [r for r in roles_de.get(t['_id'], []) if r['_id'] not in asignados]
+        rol = next((r for r in libres if r.get('name') == l['clave']), libres[0] if libres else None)
         if rol is None:
             rol = {'_type': 'UMLAttribute', '_id': doc.new_id(), '_parent': ref(colab['_id']), 'name': l['clave'], 'type': ref(t['_id'])}
             colab.setdefault('attributes', []).append(rol)
-            rol_de[t['_id']] = rol
+            roles_de.setdefault(t['_id'], []).append(rol)
         else:
             rol['name'] = l['clave']
-        ll = ll_de.get(rol['_id'])
+        ll = next((x for x in lls_de.get(rol['_id'], []) if x['_id'] not in asignados), None)
         if ll is None:
             ll = {'_type': 'UMLLifeline', '_id': doc.new_id(), '_parent': ref(inter['_id']), 'represent': ref(rol['_id']), 'isMultiInstance': False}
+        asignados.update((rol['_id'], ll['_id']))
         for k in ('name', 'stereotype'):
             ll.pop(k, None)
         participantes.append(ll)
@@ -1170,8 +1270,11 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
     fin = plan[-1][4] + 60
     H = fin - 40
 
-    # vistas
-    frames = [v for v in dg['ownedViews'] if v['_type'] == 'UMLFrameView']
+    # vistas: se regeneran las de lifelines y mensajes; el marco, las notas y lo demas se conservan
+    regeneradas = ('UMLSeqLifelineView', 'UMLSeqMessageView')
+    previas = dg.get('ownedViews', [])
+    frames = [v for v in previas if v['_type'] == 'UMLFrameView']
+    otras = [v for v in previas if v['_type'] not in regeneradas and v['_type'] != 'UMLFrameView']
     vistas = list(frames)
     linepart = {}
     for c in claves:
@@ -1232,6 +1335,18 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
         if rep:
             v['subViews'][3]['visible'] = False
         vistas.append(v)
+    # lo conservado que cuelga de una vista regenerada (p. ej. el enlace de una nota a una lifeline vieja) se descarta
+    # y se reporta; lo demas queda encima de lo generado
+    quitados, descartadas = _ids_y_refs([v for v in previas if v['_type'] in regeneradas])[0], []
+    while True:
+        colgadas = [v for v in otras if _ids_y_refs(v)[1] & quitados]
+        if not colgadas:
+            break
+        for v in colgadas:
+            otras.remove(v)
+            quitados |= _ids_y_refs(v)[0]
+            descartadas.append(v['_type'])
+    vistas += otras
     inter['messages'] = nuevos
     dg['ownedViews'] = vistas
     derecha = max(centro_ll[c] + ancho_ll[c] - ancho_ll[c] // 2 for c in claves)
@@ -1249,4 +1364,5 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
     colab['attributes'] = [a for a in colab.get('attributes', []) if a['_id'] not in roles_libres]
     doc.reindex()
     return {'mensajes': len(nuevos), 'lifelines': len(participantes), 'alto': fin, 'ancho': derecha,
-            'lifelines_quitadas': len(viejos_ll - nuevos_ll), 'roles_quitados': len(roles_libres), 'ajustes': empujados}
+            'lifelines_quitadas': len(viejos_ll - nuevos_ll), 'roles_quitados': len(roles_libres), 'ajustes': empujados,
+            'vistas_conservadas': len(otras), 'vistas_descartadas': descartadas}

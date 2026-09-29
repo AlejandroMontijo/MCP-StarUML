@@ -3,6 +3,7 @@
 #   claude mcp add staruml -- python3 "/ruta/a/MCP StarUML/server.py"
 import base64
 import json
+import math
 import os
 import sys
 import traceback
@@ -160,7 +161,7 @@ def t_svg_revisar(a):
 @tool('svg_recortar', 'Recorta una zona de un SVG a PNG con Chrome headless y devuelve la imagen para verla. '
       'x, y, ancho y alto en pixeles del SVG; sin ancho/alto toma todo. max_lado reduce la imagen (default 1600).',
       obj({'svg': S(), 'x': N(), 'y': N(), 'ancho': N(), 'alto': N(), 'salida': S(description='Guardar el PNG aqui'),
-           'max_lado': N(), 'devolver_imagen': B(description='default true')}, ['svg']), ro('Recortar SVG'))
+           'max_lado': N(), 'devolver_imagen': B(description='default true')}, ['svg']), rw('Recortar SVG'))
 def t_svg_recortar(a):
     r = R.recortar(a['svg'], a.get('x') or 0, a.get('y') or 0, a.get('ancho'), a.get('alto'), a.get('salida'),
                    a.get('max_lado', 1600))
@@ -182,7 +183,7 @@ def t_svg_recortar(a):
            'salida': S(description='Ruta opcional para guardar el archivo PNG generado'),
            'max_lado': N(description='Lado maximo en pixeles (default 1600 para balance optimo)'),
            'forzar': B(description='Forzar re-exportacion aunque exista cache')},
-          ['archivo', 'diagrama']), ro('Ver diagrama visual'))
+          ['archivo', 'diagrama']), rw('Ver diagrama visual'))
 def t_ver_visual(a):
     r = R.ver_visual(a['archivo'], a['diagrama'], salida=a.get('salida'),
                      max_lado=a.get('max_lado', 1600), forzar=bool(a.get('forzar')))
@@ -214,14 +215,17 @@ def t_comparar_codigo(a):
 
 
 @tool('staruml_diagrama_a_codigo', 'Genera esqueletos de codigo limpios y tipados (Java, Python, TypeScript) listos para '
-      'implementar a partir de las clases, atributos, metodos y asociaciones de un diagrama de clases del .mdj.',
+      'implementar a partir de las clases, atributos, metodos y asociaciones de un diagrama de clases del .mdj. '
+      'No reemplaza archivos que ya existen en carpeta_salida salvo con sobrescribir=true.',
       obj({'archivo': ARCHIVO, 'diagrama': S(description='Nombre o id del diagrama de clases'),
            'lenguaje': S(enum=['java', 'python', 'typescript'], description='Lenguaje de destino (default java)'),
-           'carpeta_salida': S(description='Carpeta donde se guardaran los archivos de codigo generados')},
-          ['archivo', 'diagrama']), ro('Generar codigo'))
+           'carpeta_salida': S(description='Carpeta donde se guardaran los archivos de codigo generados'),
+           'sobrescribir': B(description='Reemplazar los archivos que ya existan (default false: se omiten y se reportan)')},
+          ['archivo', 'diagrama']), rw('Generar codigo', destructive=True))
 def t_diagrama_a_codigo(a):
     doc = M.Doc(a['archivo'])
-    return C.generar_codigo_desde_diagrama(doc, a['diagrama'], a.get('lenguaje', 'java'), a.get('carpeta_salida'))
+    return C.generar_codigo_desde_diagrama(doc, a['diagrama'], a.get('lenguaje', 'java'), a.get('carpeta_salida'),
+                                           bool(a.get('sobrescribir')))
 
 
 @tool('staruml_codigo_a_diagrama', 'Importa clases, atributos y metodos desde archivos de codigo fuente (Java, Python, TS) '
@@ -230,11 +234,14 @@ def t_diagrama_a_codigo(a):
            'paquete': S(description='Nombre o id del paquete destino en el .mdj'),
            'diagrama': S(description='Opcional: nombre del diagrama de clases donde agregarlas visualmente'),
            'lenguaje': S(enum=['auto', 'java', 'python', 'typescript', 'csharp']),
+           'modo': S(enum=['agregar', 'sincronizar'], description='agregar (default): solo agrega los atributos que falten; '
+                                                                 'sincronizar: deja exactamente los del codigo y reporta los quitados'),
            'salida': SALIDA, 'forzar': FORZAR},
-          ['archivo', 'ruta_codigo', 'paquete']), rw('Importar codigo a diagrama'))
+          ['archivo', 'ruta_codigo', 'paquete']), rw('Importar codigo a diagrama', destructive=True))
 def t_codigo_a_diagrama(a):
     doc = M.Doc(a['archivo'])
-    info = C.importar_codigo_a_diagrama(doc, a['ruta_codigo'], a['paquete'], a.get('diagrama'), a.get('lenguaje', 'auto'))
+    info = C.importar_codigo_a_diagrama(doc, a['ruta_codigo'], a['paquete'], a.get('diagrama'), a.get('lenguaje', 'auto'),
+                                        a.get('modo') or 'agregar')
     return escribir(doc, a, info)
 
 
@@ -472,7 +479,7 @@ def t_sec_generar(a):
 # ---------------------------------------------------------------------------
 
 _TIPOS = {'string': lambda v: isinstance(v, str),
-          'number': lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+          'number': lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and (isinstance(v, int) or math.isfinite(v)),
           'boolean': lambda v: isinstance(v, bool),
           'array': lambda v: isinstance(v, list),
           'object': lambda v: isinstance(v, dict)}
@@ -579,14 +586,24 @@ def handle(msg):
             send({'jsonrpc': '2.0', 'id': mid, 'error': {'code': -32603, 'message': str(e)}})
 
 
+def _constante_no_json(c):
+    raise ValueError(f'{c} no es JSON valido')
+
+
 def main():
+    # MCP habla UTF-8. Sin esto, en Windows Python usa la pagina de codigos del sistema (cp1252) en las tuberias:
+    # los acentos llegan como mojibake y se guardan asi en el .mdj
+    if hasattr(sys.stdin, 'reconfigure'):  # no existe si stdin fue reemplazado (p. ej. en pruebas)
+        sys.stdin.reconfigure(encoding='utf-8')
+        sys.stdout.reconfigure(encoding='utf-8', newline='\n')
     for line in sys.stdin:
         line = line.strip()
         if not line:
             continue
         try:
-            msg = json.loads(line)
-        except json.JSONDecodeError:
+            # NaN e Infinity no son JSON: si pasaran, terminarian escritos en el .mdj y StarUML ya no lo abriria
+            msg = json.loads(line, parse_constant=_constante_no_json)
+        except ValueError:
             send({'jsonrpc': '2.0', 'id': None, 'error': {'code': -32700, 'message': 'JSON invalido'}})
             continue
         for m in (msg if isinstance(msg, list) else [msg]):

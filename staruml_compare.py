@@ -777,13 +777,15 @@ def _comparar_secuencia_con_codigo(uml: Dict[str, Any], codigo: Dict[str, Any]) 
 # Generador de esqueletos de codigo (Diagrama -> Codigo)
 # ---------------------------------------------------------------------------
 
-def generar_codigo_desde_diagrama(doc, nombre_diagrama: str, lenguaje: str = 'java', carpeta_salida: str = None) -> Dict[str, Any]:
+def generar_codigo_desde_diagrama(doc, nombre_diagrama: str, lenguaje: str = 'java', carpeta_salida: str = None,
+                                  sobrescribir: bool = False) -> Dict[str, Any]:
     """Genera archivos de codigo fuente limpios a partir de las clases de un diagrama."""
     uml = extraer_elementos_diagrama(doc, nombre_diagrama)
     if uml.get('tipo_diagrama') != 'UMLClassDiagram':
         raise ValueError('Solo se puede generar codigo a partir de diagramas de clases')
         
     archivos_generados = {}
+    escritos, omitidos_existentes, omitidos_nombre = [], [], []
     clases = uml.get('clases', {})
     
     for nom, c in clases.items():
@@ -808,18 +810,33 @@ def generar_codigo_desde_diagrama(doc, nombre_diagrama: str, lenguaje: str = 'ja
         archivos_generados[nom_archivo] = codigo
         
         if carpeta_salida:
-            os.makedirs(carpeta_salida, exist_ok=True)
-            ruta_dest = os.path.join(carpeta_salida, nom_archivo)
+            carpeta = os.path.abspath(os.path.expanduser(carpeta_salida))
+            ruta_dest = os.path.join(carpeta, nom_archivo)
+            # el nombre sale del modelo: no puede escaparse de la carpeta ni llevar caracteres invalidos en un archivo
+            if re.search(r'[<>:"/\\|?*\x00-\x1f]', nom) or os.path.dirname(os.path.abspath(ruta_dest)) != carpeta:
+                omitidos_nombre.append(nom)
+                continue
+            if os.path.exists(ruta_dest) and not sobrescribir:
+                omitidos_existentes.append(nom_archivo)
+                continue
+            os.makedirs(carpeta, exist_ok=True)
             with open(ruta_dest, 'w', encoding='utf-8') as f:
                 f.write(codigo)
+            escritos.append(nom_archivo)
                 
-    return {
+    res = {
         'diagrama': nombre_diagrama,
         'lenguaje': lenguaje,
         'total_archivos': len(archivos_generados),
         'archivos': list(archivos_generados.keys()),
-        'guardado_en': carpeta_salida
+        'guardado_en': carpeta_salida,
+        'escritos': escritos,
+        'omitidos_por_existir': omitidos_existentes,
+        'omitidos_por_nombre_invalido': omitidos_nombre
     }
+    if omitidos_existentes:
+        res['nota'] = 'Esos archivos ya existian y no se tocaron; usa sobrescribir=true para reemplazarlos.'
+    return res
 
 def _generar_clase_java(c: Dict[str, Any]) -> str:
     nom = c['nombre']
@@ -957,8 +974,12 @@ def _generar_clase_typescript(c: Dict[str, Any]) -> str:
 # Importador de codigo hacia .mdj (Codigo -> Diagrama)
 # ---------------------------------------------------------------------------
 
-def importar_codigo_a_diagrama(doc, ruta_codigo: str, paquete_nombre: str, nombre_diagrama: str = None, lenguaje: str = 'auto') -> Dict[str, Any]:
-    """Importa clases, atributos y metodos desde codigo hacia el modelo .mdj y opcionalmente a un diagrama."""
+def importar_codigo_a_diagrama(doc, ruta_codigo: str, paquete_nombre: str, nombre_diagrama: str = None, lenguaje: str = 'auto',
+                               modo: str = 'agregar') -> Dict[str, Any]:
+    """Importa clases, atributos y metodos desde codigo hacia el modelo .mdj y opcionalmente a un diagrama.
+    modo='agregar' solo agrega los atributos que falten; 'sincronizar' deja exactamente los del codigo."""
+    if modo not in ('agregar', 'sincronizar'):
+        raise ValueError(f'modo debe ser "agregar" o "sincronizar", no "{modo}"')
     clases_codigo = escanear_codigo(ruta_codigo, lenguaje)
     if not clases_codigo:
         raise ValueError(f"No se encontraron clases en {ruta_codigo}")
@@ -967,6 +988,7 @@ def importar_codigo_a_diagrama(doc, ruta_codigo: str, paquete_nombre: str, nombr
     
     clases_creadas = []
     clases_actualizadas = []
+    atributos_agregados, atributos_quitados = {}, {}
     
     for nom, c_cod in clases_codigo.items():
         try:
@@ -990,11 +1012,22 @@ def importar_codigo_a_diagrama(doc, ruta_codigo: str, paquete_nombre: str, nombr
             target_clase = c_existente
             clases_actualizadas.append(nom)
             
-        attrs_nombres = [a['nombre'] for a in c_cod.get('atributos', [])]
+        # sin repetidos y en orden: el parser puede ver dos veces el mismo nombre
+        attrs_nombres = list(dict.fromkeys(a['nombre'] for a in c_cod.get('atributos', [])))
         if attrs_nombres:
             import staruml_mdj as M
             if doc.kind(target_clase) not in ('boundary', 'control'):
-                M.set_atributos(doc, target_clase, attrs_nombres)
+                # agregar no quita nada del modelo; sincronizar quita lo que no esta en el codigo y lo reporta
+                if modo == 'sincronizar':
+                    antes = {a.get('name') for a in target_clase.get('attributes', [])}
+                    quitados = M.set_atributos(doc, target_clase, attrs_nombres)
+                    if quitados:
+                        atributos_quitados[nom] = quitados
+                    agregados = [n for n in attrs_nombres if n not in antes]
+                else:
+                    agregados = M.agregar_atributos(doc, target_clase, attrs_nombres)
+                if agregados:
+                    atributos_agregados[nom] = agregados
                 
     vistas_creadas = []
     if nombre_diagrama:
@@ -1020,6 +1053,9 @@ def importar_codigo_a_diagrama(doc, ruta_codigo: str, paquete_nombre: str, nombr
         'total_clases_codigo': len(clases_codigo),
         'clases_creadas': clases_creadas,
         'clases_actualizadas': clases_actualizadas,
+        'modo': modo,
+        'atributos_agregados': atributos_agregados,
+        'atributos_quitados': atributos_quitados,
         'vistas_creadas': vistas_creadas
     }
 
