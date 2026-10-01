@@ -96,6 +96,37 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
   - Cajas encimadas (un subestado dentro de su estado compuesto no cuenta).
 - Una actividad anidada (p. ej. la actividad *do* de un estado) se valida por separado.
 
+## Cualquier diagrama: componentes, despliegue y los demás
+
+- Los 28 tipos de diagrama de StarUML y los símbolos de sus paletas están en
+  `uml_catalogo.md` (y en `mdj_catalogo`). Un símbolo se dibuja con `mdj_dibujar` por
+  su nombre en la paleta (`Node`, `Artifact`, `Deployment`...), y el archivo queda como
+  si se hubiera dibujado en StarUML: se copia lo que StarUML crea para ese símbolo.
+- Cada diagrama vive donde StarUML lo pone: estados dentro de su máquina de estados
+  (los estados en su región), actividades dentro de su actividad, secuencia,
+  comunicación y tiempos dentro de colaboración > interacción, bloque interno de SysML
+  dentro de un bloque. `mdj_diagrama_crear` crea esos contenedores.
+- Anidar es contener también en el modelo: un artefacto dibujado dentro de un nodo es
+  del nodo, un subestado está en la región de su estado compuesto, una acción dentro de
+  una partición está en la partición. `mdj_diagrama_generar` lo hace con `dentro`.
+- Despliegue: los nodos y entornos de ejecución se anidan (servidor > contenedor), los
+  artefactos van en el nodo donde se despliegan o se unen con `Deployment`, y los nodos
+  se comunican con `Communication Path`, con el protocolo como nombre.
+- Componentes: las interfaces provistas son `Interface Realization` del componente a la
+  interfaz y las requeridas `Dependency`; los puertos van sobre el componente (`sobre`).
+- Lo de adentro de un contenedor que encapsula (componente, clase o bloque con partes,
+  actividad estructurada, región de expansión) se comunica hacia afuera por el
+  contenedor o por un puerto o pin suyo, no con una línea directa que atraviese el
+  borde. `mdj_diagrama_generar` y `mdj_validar` lo avisan. En los demás contenedores
+  (sujeto de casos de uso, carril, pool, paquete, estado compuesto, nodo, marco) cruzar
+  el borde es lo normal.
+- Carriles (swimlanes, pools, lanes): contiguos y del mismo largo, con el flujo en un
+  solo sentido (hacia abajo en verticales, hacia la derecha en horizontales). Lo que
+  pertenece a un carril va `dentro` de él, también los nodos de objeto y almacenes.
+- `mdj_validar` revisa el metamodelo de StarUML en todos los diagramas: tipos que
+  StarUML no conoce, elementos en campos que no existen, vistas que el diagrama no
+  admite y líneas sin extremos válidos.
+
 ## Exportar y revisar
  
 - `staruml_exportar` usa el CLI (`StarUML image ... -f svg -s selector`) con límite de

@@ -291,6 +291,61 @@ def ids_integros(path):
     return v['n_duplicados'] == 0 and v['n_colgantes'] == 0 and v['n_parent_mismatch'] == 0
 
 
+def _vistas_de(dg):
+    res = []
+
+    def walk(v):
+        res.append(v)
+        for s in v.get('subViews', []):
+            walk(s)
+    for v in dg.get('ownedViews', []):
+        walk(v)
+    return res
+
+
+def poblar_paleta(doc, dg):
+    """Dibuja en el diagrama cada simbolo de su paleta con staruml_uml.dibujar: primero las cajas sueltas, luego las
+    que van sobre otra vista y al final las lineas, conectando vistas del tipo que espera cada plantilla. Devuelve
+    (dibujados, {simbolo: motivo de lo que no se pudo})."""
+    import staruml_uml as U
+    pl = U.plantillas()['plantillas'][dg['_type']]
+    hechos, fallas = [], {}
+    pend = [c for c, p in pl.items() if p['forma'] != 'line' and not any(U.necesita(p))] + \
+           [c for c, p in pl.items() if p['forma'] != 'line' and any(U.necesita(p))] + \
+           [c for c, p in pl.items() if p['forma'] == 'line']
+    for _ in range(4):  # lo que va sobre algo que todavia no se dibujo se reintenta
+        siguen = []
+        for c in pend:
+            p = pl[c]
+            uc, uh = U.necesita(p)
+            vs = [v for v in _vistas_de(dg) if v.get('_id') and isinstance(v.get('model'), dict)]
+            if p['forma'] == 'line':
+                a = next((v for v in vs if v['_type'] == p.get('cola')), None) if uc else None
+                b = (next((v for v in vs if v['_type'] == p.get('cabeza') and v is not a), None) or
+                     next((v for v in vs if v['_type'] == p.get('cabeza')), None)) if uh else None
+                if (uc and not a) or (uh and not b):
+                    fallas[c] = f'no hay {p.get("cola")} / {p.get("cabeza")}'
+                    siguen.append(c)
+                    continue
+                U.dibujar(doc, dg['_id'], c, desde=a and a['_id'], hasta=b and b['_id'])
+            elif uc or uh:
+                t = p.get('cabeza') or p.get('cola')
+                b = next((v for v in vs if v['_type'] == t), None)
+                if not b:
+                    fallas[c] = f'no hay {t}'
+                    siguen.append(c)
+                    continue
+                U.dibujar(doc, dg['_id'], c, sobre=b['_id'])
+            else:
+                U.dibujar(doc, dg['_id'], c, nombre=c.split('|')[0].replace(' ', '') + 'X')
+            hechos.append(c)
+            fallas.pop(c, None)
+        if len(siguen) == len(pend):
+            break
+        pend = siguen
+    return hechos, fallas
+
+
 def modelo_real():
     """El .mdj real del caso de uso (no se versiona): STARUML_MCP_MODELO_REAL o el primer pruebas/*.mdj."""
     p = os.environ.get('STARUML_MCP_MODELO_REAL')

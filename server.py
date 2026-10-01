@@ -16,8 +16,9 @@ import staruml_mdj as M          # noqa: E402
 import staruml_render as R       # noqa: E402
 import staruml_compare as C      # noqa: E402
 import staruml_programa as P     # noqa: E402
+import staruml_uml as U          # noqa: E402
 
-VERSION = '2.1.0'
+VERSION = '2.2.0'
 PROTOCOLOS = ('2025-06-18', '2025-03-26', '2024-11-05')
 AQUI = os.path.dirname(os.path.abspath(__file__))
 NIVELES_LOG = ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
@@ -28,7 +29,9 @@ INSTRUCCIONES = (
     'archivos .mdj de StarUML sin abrir la aplicacion. '
     'Las de edicion respaldan antes de escribir, no escriben si StarUML esta abierto y validan al terminar. '
     'Llama a staruml_reglas para ver las convenciones (UML, OOSE, secuencias, lineas y codigo). '
-    'Flujo tipico: mdj_resumen -> mdj_modelo / mdj_secuencia -> staruml_ver_visual -> staruml_comparar_codigo -> editar -> mdj_validar.')
+    'Flujo tipico: mdj_resumen -> mdj_modelo / mdj_secuencia -> staruml_ver_visual -> staruml_comparar_codigo -> editar -> mdj_validar. '
+    'Cualquier tipo de diagrama de StarUML (componentes, despliegue, estados, actividades, BPMN, ERD, C4, SysML...): '
+    'mdj_catalogo -> mdj_diagrama_crear -> mdj_diagrama_generar o mdj_dibujar -> staruml_ver_visual -> mdj_validar.')
 
 
 S = lambda **kw: {'type': 'string', **kw}
@@ -119,7 +122,8 @@ def t_estado(a):
 
 
 @tool('staruml_reglas', 'Devuelve las convenciones de trabajo: formato del archivo, respaldo, lineas en diagramas de clases, '
-      'reglas de robustez (OOSE) y reglas de los diagramas de secuencia. Leer antes de editar.', obj({}), ro('Reglas de trabajo'))
+      'reglas de robustez (OOSE), de secuencia, de estados y actividades y de los demas diagramas (componentes, '
+      'despliegue...). Leer antes de editar.', obj({}), ro('Reglas de trabajo'))
 def t_reglas(a):
     with open(os.path.join(AQUI, 'reglas.md'), encoding='utf-8') as f:
         return f.read()
@@ -161,6 +165,16 @@ def t_comportamiento(a):
     return M.comportamiento(M.Doc(a['archivo']), a['diagrama'])
 
 
+@tool('mdj_catalogo', 'Tipos de diagrama que soporta StarUML (UML 2.5 y extensiones: BPMN, SysML, C4, ERD, flowchart, DFD, '
+      'wireframe, mindmap, AWS, GCP) con su nombre corto. Con diagrama: la paleta de ese tipo, simbolo por simbolo, '
+      'con su forma (caja o linea), que conecta cada linea y sobre que va cada simbolo que se pone encima de otro. '
+      'Los nombres de simbolo sirven para mdj_dibujar.',
+      obj({'diagrama': S(description='Opcional: tipo de diagrama (nombre corto como despliegue o tipo de StarUML)')}),
+      ro('Catalogo de diagramas y simbolos'))
+def t_catalogo(a):
+    return U.catalogo(a.get('diagrama'))
+
+
 @tool('mdj_geometria', 'Cajas (posicion y tamano) y lineas (puntos) de un diagrama, con el id de cada vista.',
       obj({'archivo': ARCHIVO, 'diagrama': S()}, ['archivo', 'diagrama']), ro('Geometria'))
 def t_geometria(a):
@@ -179,11 +193,17 @@ def t_buscar(a):
       'entity->entity sin asociacion, consultas sin reply, vistas de mensaje incompletas y llamadas sin activacion; '
       'ademas, reglas de diagramas de estados (inicial unico, finales sin salida, estados inalcanzables o sin salida, '
       'decisiones sin guarda, transiciones ambiguas) y de actividades (uniones y bifurcaciones implicitas, nodos '
-      'inalcanzables, decisiones sin guarda).',
+      'inalcanzables, decisiones sin guarda). Siempre revisa tambien el metamodelo de StarUML: tipos desconocidos, '
+      'elementos en campos que no los admiten, vistas que el diagrama no admite y lineas sin extremos validos; y lineas '
+      'que salen de un elemento anidado hacia afuera de su contenedor (lo atraviesan).',
       obj({'archivo': ARCHIVO, 'oose': B(description='Revisar tambien reglas OOSE (default true)')}, ['archivo']),
       ro('Validar'))
 def t_validar(a):
-    return M.validar(M.Doc(a['archivo']), oose=a.get('oose', True) is not False)
+    doc = M.Doc(a['archivo'])
+    res = M.validar(doc, oose=a.get('oose', True) is not False)
+    res['metamodelo'] = U.validar_metamodelo(doc)
+    res['lineas_que_atraviesan_contenedores'] = U.lineas_que_salen(doc)
+    return res
 
 
 @tool('mdj_diff', 'Diferencias a nivel modelo entre dos .mdj: elementos quitados y agregados, cambios de nombre, '
@@ -403,16 +423,98 @@ def t_paquete_crear(a):
     return escribir(doc, a, {'paquete': pk['_id']})
 
 
-@tool('mdj_diagrama_crear', 'Crea un diagrama vacio de clases, de casos de uso o de secuencia (este con su colaboracion, '
-      'interaccion y marco, como lo hace StarUML). Con por_defecto=true queda como el que abre StarUML.',
-      obj({'archivo': ARCHIVO, 'tipo': S(enum=['clases', 'casos_de_uso', 'secuencia']), 'nombre': S(),
-           'dentro_de': S(description='Nombre o id del modelo o paquete padre (default: el modelo raiz)'),
+@tool('mdj_diagrama_crear', 'Crea un diagrama vacio de cualquier tipo, con lo que StarUML crea junto con el: colaboracion, '
+      'interaccion y marco en secuencia, comunicacion, tiempos y vista general; maquina de estados y region en estados; '
+      'actividad en actividades; modelo de datos en ERD, etc. tipo = nombre corto (clases, casos_de_uso, secuencia, paquetes, '
+      'objetos, estructura_compuesta, componentes, despliegue, comunicacion, tiempos, vista_general_interaccion, estados, '
+      'actividades, flujo_informacion, perfil, erd, flowchart, dfd, bpmn, c4, wireframe, mindmap, aws, gcp, sysml_requisitos, '
+      'sysml_bloques, sysml_bloque_interno, sysml_parametrico) o el tipo de StarUML (mdj_catalogo los lista). '
+      'Con por_defecto=true queda como el que abre StarUML.',
+      obj({'archivo': ARCHIVO, 'tipo': S(), 'nombre': S(),
+           'dentro_de': S(description='Nombre o id del modelo, paquete u otro contenedor padre (default: el modelo raiz)'),
            'por_defecto': B(description='Abrirlo por defecto al cargar el archivo'), 'salida': SALIDA, 'forzar': FORZAR},
           ['archivo', 'tipo', 'nombre']), rw('Crear diagrama'))
 def t_diagrama_crear(a):
     doc = M.Doc(a['archivo'])
-    dg = M.crear_diagrama(doc, a['tipo'], a['nombre'], a.get('dentro_de'), bool(a.get('por_defecto')))
-    return escribir(doc, a, {'diagrama': dg['_id'], 'tipo': dg['_type']})
+    dg, avisos = U.crear_diagrama(doc, a['tipo'], a['nombre'], a.get('dentro_de'), bool(a.get('por_defecto')))
+    extra = {'diagrama': dg['_id'], 'tipo': dg['_type']}
+    if avisos:
+        extra['avisos'] = avisos
+    return escribir(doc, a, extra)
+
+
+@tool('mdj_dibujar', 'Dibuja un simbolo de la paleta de StarUML en un diagrama de cualquier tipo, exactamente como lo crea '
+      'StarUML: el elemento de modelo y su vista (nodo, componente, artefacto, puerto, estado, accion, decision, lifeline, '
+      'tarea BPMN, entidad ERD...; o una linea: dependencia, despliegue, manifestacion, ruta de comunicacion, conector, '
+      'transicion, flujo, mensaje...). simbolo = nombre de la paleta (mdj_catalogo con el diagrama los lista). '
+      'Cajas en x,y (o en el primer lugar libre); las que van encima de otra (puerto, pin, region, particion, lifeline de '
+      'tiempos) llevan sobre. Las lineas llevan desde y hasta (vista o elemento ya dibujado).',
+      obj({'archivo': ARCHIVO, 'diagrama': S(), 'simbolo': S(), 'nombre': S(), 'x': N(), 'y': N(), 'ancho': N(), 'alto': N(),
+           'sobre': S(description='Vista o elemento sobre el que va el simbolo'),
+           'desde': S(description='Linea: vista o elemento de origen'), 'hasta': S(description='Linea: vista o elemento destino'),
+           'puntos': PUNTOS, 'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'diagrama', 'simbolo']), rw('Dibujar simbolo'))
+def t_dibujar(a):
+    doc = M.Doc(a['archivo'])
+    r = U.dibujar(doc, a['diagrama'], a['simbolo'], a.get('nombre'), a.get('x'), a.get('y'), a.get('ancho'), a.get('alto'),
+                  a.get('desde'), a.get('hasta'), a.get('sobre'), a.get('puntos') or ())
+    return escribir(doc, a, r)
+
+
+@tool('mdj_diagrama_generar', 'Dibuja de una vez un diagrama completo de cualquier tipo (despliegue, componentes, estados, '
+      'actividades, BPMN, ERD, C4...) a partir de listas de elementos y relaciones. Acomoda por capas siguiendo las '
+      'relaciones sin encimar cajas, anida (nodo dentro de nodo, artefacto en su nodo, subestado en su estado compuesto, '
+      'accion en su particion) moviendo tambien el elemento de modelo, dimensiona cada contenedor segun lo que lleva y '
+      'rutea las lineas de primer nivel para que no crucen otras cajas. Lo nuevo va debajo de lo que ya tenga el diagrama. '
+      'Avisa (avisos) cuando una linea sale de un elemento anidado hacia afuera de su contenedor y lista las lineas que '
+      'cruzan cajas. '
+      'Los simbolos son los de la paleta del diagrama (mdj_catalogo).',
+      obj({'archivo': ARCHIVO, 'diagrama': S(),
+           'elementos': {'type': 'array', 'items': obj({
+               'simbolo': S(), 'nombre': S(), 'clave': S(description='Para distinguir dos elementos con el mismo nombre'),
+               'dentro': S(description='Clave o nombre del elemento de la lista que lo contiene'),
+               'sobre': S(description='Clave del elemento o de la relacion sobre la que va (puerto, pin, restriccion '
+                                      'de tiempo sobre un mensaje...), o algo ya dibujado en el diagrama'),
+               'x': N(description='Posicion fija (si no, la del acomodo)'), 'y': N(), 'ancho': N(), 'alto': N()},
+               ['simbolo'])},
+           'relaciones': {'type': 'array', 'items': obj({'simbolo': S(), 'desde': S(), 'hasta': S(), 'nombre': S(),
+                                                         'clave': S(description='Para poner algo sobre esta linea')},
+                                                        ['simbolo'])},
+           'disposicion': S(enum=['capas', 'secuencia'],
+                            description='capas (default) o secuencia: elementos de primer nivel en fila y relaciones '
+                                        'en orden hacia abajo (lifelines y mensajes)'),
+           'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'diagrama', 'elementos']), rw('Generar diagrama'))
+def t_diagrama_generar(a):
+    doc = M.Doc(a['archivo'])
+    r = U.generar_diagrama(doc, a['diagrama'], a['elementos'], a.get('relaciones') or [], a.get('disposicion') or 'capas')
+    return escribir(doc, a, r)
+
+
+@tool('mdj_elemento_crear', 'Crea un elemento de modelo de cualquier tipo de StarUML sin dibujarlo (nodo, componente, '
+      'artefacto, interfaz, senal, estado, accion, requisito SysML, entidad ERD...), validado contra el metamodelo: el '
+      'contenedor debe admitirlo y las propiedades deben existir y tener el tipo correcto.',
+      obj({'archivo': ARCHIVO, 'tipo': S(description='Tipo de StarUML, p. ej. UMLNode, UMLComponent, UMLArtifact'),
+           'nombre': S(), 'dentro_de': S(description='Contenedor (default: el modelo raiz)'),
+           'campo': S(description='Campo del contenedor (default: ownedElements o el unico que lo admite)'),
+           'propiedades': {'type': 'object', 'description': 'Atributos del metamodelo, p. ej. {"isAbstract": true}'},
+           'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'tipo']), rw('Crear elemento'))
+def t_elemento_crear(a):
+    doc = M.Doc(a['archivo'])
+    el = U.crear_elemento(doc, a['tipo'], a.get('nombre'), a.get('dentro_de'), a.get('campo'), a.get('propiedades'))
+    return escribir(doc, a, {'elemento': el['_id'], 'tipo': el['_type']})
+
+
+@tool('mdj_relacion_crear', 'Crea una relacion de cualquier tipo entre dos elementos sin dibujarla: dirigidas (dependencia, '
+      'despliegue, manifestacion, realizacion, transicion, flujo de control u objeto, mensaje, flujo de informacion, '
+      'extension, include/extend...) o con extremos (asociacion, ruta de comunicacion, conector, enlace, relacion ERD). '
+      'Queda en el contenedor indicado o en el primero, desde el origen hacia arriba, que pueda guardarla.',
+      obj({'archivo': ARCHIVO, 'tipo': S(description='Tipo de StarUML, p. ej. UMLDeployment, UMLCommunicationPath'),
+           'origen': S(), 'destino': S(), 'nombre': S(), 'dueno': S(),
+           'propiedades': {'type': 'object', 'description': 'Atributos del metamodelo de la relacion'},
+           'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'tipo', 'origen', 'destino']), rw('Crear relacion'))
+def t_relacion_crear(a):
+    doc = M.Doc(a['archivo'])
+    el = U.crear_relacion(doc, a['tipo'], a['origen'], a['destino'], a.get('nombre'), a.get('dueno'), a.get('propiedades'))
+    return escribir(doc, a, {'relacion': el['_id'], 'tipo': el['_type']})
 
 
 @tool('mdj_renombrar', 'Cambia el nombre de un elemento (id, nombre o Tipo:Nombre) y el texto de su nombre en todas sus vistas.',
@@ -536,18 +638,27 @@ def t_borrar(a):
     return escribir(doc, a, info)
 
 
-@tool('mdj_vista_agregar', 'Dibuja una clase o actor que ya existe en un diagrama de clases, en notacion de iconos. Copia el '
-      'estilo de otra vista del mismo estereotipo si la hay.',
+@tool('mdj_vista_agregar', 'Dibuja un elemento que ya existe en un diagrama. Clases y actores en diagramas de clases o de '
+      'casos de uso: notacion de iconos, copiando el estilo de otra vista del mismo estereotipo si la hay. Cualquier otro '
+      'elemento (nodo, componente, estado, relacion...) se dibuja con el simbolo de su tipo en la paleta del diagrama; '
+      'las relaciones llevan desde y hasta (vistas o elementos ya dibujados).',
       obj({'archivo': ARCHIVO, 'diagrama': S(), 'elemento': S(), 'x': N(), 'y': N(), 'ancho': N(), 'alto': N(),
-           'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'diagrama', 'elemento', 'x', 'y']), rw('Agregar vista'))
+           'desde': S(), 'hasta': S(), 'puntos': PUNTOS, 'salida': SALIDA, 'forzar': FORZAR},
+          ['archivo', 'diagrama', 'elemento']), rw('Agregar vista'))
 def t_vista_agregar(a):
     doc = M.Doc(a['archivo'])
     dg = doc.diagram(a['diagrama'])
     el = doc.find(a['elemento'])
     if doc.views_of(el['_id'], dg):
         raise M.MdjError(f'{el.get("name")} ya tiene vista en {dg.get("name")}')
-    v = M.vista_nueva(doc, dg, el, a['x'], a['y'], a.get('ancho'), a.get('alto'))
-    return escribir(doc, a, {'vista': v['_id']})
+    if dg['_type'] in ('UMLClassDiagram', 'UMLUseCaseDiagram') and el['_type'] in ('UMLClass', 'UMLActor', 'UMLInterface'):
+        if a.get('x') is None or a.get('y') is None:
+            raise M.MdjError('Indica x e y')
+        v = M.vista_nueva(doc, dg, el, a['x'], a['y'], a.get('ancho'), a.get('alto'))
+        return escribir(doc, a, {'vista': v['_id']})
+    r = U.vista_de(doc, dg['_id'], el['_id'], a.get('x'), a.get('y'), a.get('ancho'), a.get('alto'),
+                   a.get('desde'), a.get('hasta'), a.get('puntos') or ())
+    return escribir(doc, a, r)
 
 
 @tool('mdj_vista_mover', 'Mueve y/o cambia el tamano de la vista de un elemento (o de una vista por su id) dentro de un '

@@ -73,7 +73,7 @@ def exportar(mdj, carpeta, diagrama=None, formato='svg', timeout=None):
     carpeta = os.path.abspath(os.path.expanduser(carpeta))
     os.makedirs(carpeta, exist_ok=True)
     if diagrama in (None, '', 'todos'):
-        selector = '@UMLDiagram'
+        selector = '@Diagram'  # todos: UML y los de las extensiones (ERD, BPMN, C4, SysML...)
         antes = {f: os.path.getmtime(f) for f in glob.glob(os.path.join(carpeta, f'*.{formato}'))}
         salida = _correr([cli, 'image', mdj, '-f', formato, '-s', selector,
                           '-o', os.path.join(carpeta, f'<%=element.name%>.{formato}')], timeout)
@@ -171,7 +171,7 @@ def revisar_svg(svg, mdj, diagrama, max_items=80):
         s = f.read()
     doc = Doc(mdj)
     dg = doc.diagram(diagrama)
-    textos, off = [], None
+    textos, girados, off = [], [], None
     for m in re.finditer(r'<text([^>]*)>([^<]*)</text>', s):
         a, t = m.group(1), unescape(m.group(2))
         if not t.strip():
@@ -187,8 +187,23 @@ def revisar_svg(svg, mdj, diagrama, max_items=80):
         w = _ancho(t, px, bold)
         anc = _atributo(a, 'text-anchor', 'start')
         x0 = x - w / 2 if anc == 'middle' else (x - w if anc == 'end' else x)
-        textos.append((t, x0, y - px / 2 + 1, x0 + w, y + px / 2 - 1))
+        gm = re.search(r'matrix\((-?[\d.e+-]+) (-?[\d.e+-]+) (-?[\d.e+-]+) (-?[\d.e+-]+) (-?[\d.e+-]+) (-?[\d.e+-]+)\)', a)
+        if gm and not tr:
+            # texto girado (nombres de carriles, pools y lanes): se transforman las esquinas de su caja
+            ma, mb, mc, md, me, mf = (float(g) for g in gm.groups())
+            arriba = 'text-before-edge' in (_atributo(a, 'dominant-baseline', '') or '')
+            y0, y1 = (y, y + px) if arriba else (y - px / 2 + 1, y + px / 2 - 1)
+            esq = [(ma * cx + mc * cy + me, mb * cx + md * cy + mf) for cx in (x0, x0 + w) for cy in (y0, y1)]
+            girados.append((t, min(p[0] for p in esq), min(p[1] for p in esq),
+                            max(p[0] for p in esq), max(p[1] for p in esq)))
+            continue
+        if 'text-before-edge' in (_atributo(a, 'dominant-baseline', '') or ''):
+            textos.append((t, x0, y + 1, x0 + w, y + px - 1))  # y es el borde de arriba del texto
+        else:
+            textos.append((t, x0, y - px / 2 + 1, x0 + w, y + px / 2 - 1))
     dx, dy = off if off else (0, 0)
+    # los girados estan en coordenadas del SVG; los demas, en las del desfase de StarUML
+    textos += [(t, a_ - dx, b_ - dy, c_ - dx, d_ - dy) for t, a_, b_, c_, d_ in girados]
     segs = []
     for m in re.finditer(r'<path([^>]*)/?>', s):
         a = m.group(1)
@@ -215,7 +230,14 @@ def revisar_svg(svg, mdj, diagrama, max_items=80):
                 cajas.append((doc.name_of(v['model']['$ref']), r))
     dentro = lambda p, r, m=0: r[0] - m <= p[0] <= r[2] + m and r[1] - m <= p[1] <= r[3] + m
     enc = lambda r, m: (r[0] + m, r[1] + m, r[2] - m, r[3] - m)
-    propios = lambda p, q: any(dentro(p, r, 2) and dentro(q, r, 2) for _, r in cajas + notas)
+    # el dibujo propio de una figura sin nada adentro (rombo, triangulo, nodo de expansion, icono...) no es una linea
+    # que pase sobre su nombre: los segmentos que caen enteros dentro de ella se ignoran
+    hojas = [(v['left'], v['top'], v['left'] + v['width'], v['top'] + v['height'])
+             for v in dg.get('ownedViews', []) if not v.get('containedViews') and v.get('visible', True) is not False
+             and all(isinstance(v.get(k), (int, float)) for k in ('left', 'top', 'width', 'height'))
+             and not v['_type'].endswith('FrameView') and 'Swimlane' not in v['_type'] and 'Lane' not in v['_type']
+             and 'Pool' not in v['_type']]
+    propios = lambda p, q: any(dentro(p, r, 2) and dentro(q, r, 2) for r in [r for _, r in cajas + notas] + hojas)
     lineas = [(p, q) for p, q in segs if not propios(p, q)]
     prob = []
     rd = lambda p: [round(c) for c in p]

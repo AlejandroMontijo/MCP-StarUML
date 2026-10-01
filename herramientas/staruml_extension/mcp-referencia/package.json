@@ -1,0 +1,10 @@
+{
+	"name": "mcp.referencia",
+	"title": "MCP StarUML: modelo de referencia",
+	"description": "Dibuja cada simbolo de la paleta de cada diagrama para extraer plantillas de vista. Solo se usa con 'staruml exec'.",
+	"homepage": "",
+	"version": "1.0.0",
+	"engines": {
+		"staruml": ">=6.0.0"
+	}
+}

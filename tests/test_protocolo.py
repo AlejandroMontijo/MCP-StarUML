@@ -33,7 +33,7 @@ def test_initialize_negocia_version():
 
 def test_tools_list_completo(cliente):
     tools = cliente.pedir('tools/list')['result']['tools']
-    assert len(tools) == 34
+    assert len(tools) == 39
     nombres = [t['name'] for t in tools]
     assert len(set(nombres)) == len(nombres)
     for t in tools:

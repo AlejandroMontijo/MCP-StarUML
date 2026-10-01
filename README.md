@@ -15,6 +15,8 @@ Desarrollado en Python puro (3.9+), sin dependencias externas pesadas, comunicá
 - **Diagrama de un Programa Ya Hecho:** Dibuja el diagrama de clases completo de un programa (Java por defecto) con sus paquetes, herencia, interfaces, enumeraciones y asociaciones, acomodado por niveles y sin líneas que crucen cajas; crea el `.mdj` si no existe.
 - **Edición Segura y Confiable:** Respaldos automáticos antes de escribir, prevención de sobreescritura si la aplicación está abierta y validación de integridad referencial.
 - **Generador Inteligente de Secuencias:** Construye diagramas de secuencia completos con lifelines, ordenación automática, activación con pila de llamadas y cálculo de separación para evitar solapamiento de textos.
+- **Todos los Diagramas y Símbolos de StarUML:** Crea, dibuja, lee y valida los 28 tipos de diagrama que trae StarUML: los de UML 2.5 (clases, paquetes, objetos, estructura compuesta, componentes, despliegue, perfil, casos de uso, actividades, estados, secuencia, comunicación, tiempos, vista general de interacción y flujo de información) y los de sus extensiones (ERD, flowchart, DFD, BPMN, C4, SysML, wireframe, mapa mental, AWS y Google Cloud), con cada uno de los 419 símbolos de sus paletas. Cada símbolo se instancia desde una plantilla que dibujó el propio StarUML, así el archivo queda como si se hubiera hecho a mano en la aplicación. `uml_catalogo.md` los describe uno por uno.
+- **Diagramas Completos de una Vez:** `mdj_diagrama_generar` acomoda por capas cualquier diagrama a partir de listas de elementos y relaciones, anida contenedores (nodos, estados compuestos, particiones) y rutea las líneas sin cruzar cajas.
 
 ---
 
@@ -78,7 +80,7 @@ Las rutas relativas de `salida`, `carpeta`, `carpeta_salida` y `ruta_codigo` se 
 
 ---
 
-## Catálogo de Herramientas (34)
+## Catálogo de Herramientas (39)
 
 ### Inspección Visual y Renderizado
 | Herramienta | Descripción |
@@ -104,10 +106,11 @@ Las rutas relativas de `salida`, `carpeta`, `carpeta_salida` y `ruta_codigo` se 
 | `mdj_resumen` | Lista diagramas del archivo, vistas, diagrama por defecto y conteo por estereotipo. |
 | `mdj_modelo` | Extrae clases, atributos, métodos, documentación y asociaciones con roles y multiplicidades. |
 | `mdj_secuencia` | Extrae la secuencia ordenada de mensajes, lifelines, tipos y respuestas (replies). |
+| `mdj_catalogo` | Tipos de diagrama que soporta StarUML con su nombre corto y, para uno, su paleta símbolo por símbolo (forma, vista, qué conecta cada línea y sobre qué va cada símbolo que se pone encima de otro). |
 | `mdj_comportamiento` | Lee un diagrama de estados (estados, compuestos, actividades entry/do/exit y transiciones con disparador, guarda y efecto) o de actividades (acciones, nodos de control, particiones y flujos con guarda). |
-| `mdj_geometria` | Coordenadas, dimensiones e identificadores de vistas de cajas y líneas de un diagrama. |
+| `mdj_geometria` | Coordenadas, dimensiones e identificadores de vistas de cajas y líneas de un diagrama de cualquier tipo. |
 | `mdj_buscar` | Búsqueda flexible de elementos por nombre, texto o tipo UML (`UMLClass`, `UMLAssociation`, etc.). |
-| `mdj_validar` | Valida integridad estructural (IDs duplicados, referencias rotas) y reglas OOSE/robustez, notación de íconos, estereotipos guardados como texto, cajas encimadas, coherencia entre cada caso de uso y su paquete de análisis, y reglas de diagramas de estados y de actividades. |
+| `mdj_validar` | Valida integridad estructural (IDs duplicados, referencias rotas) y reglas OOSE/robustez, notación de íconos, estereotipos guardados como texto, cajas encimadas, coherencia entre cada caso de uso y su paquete de análisis, y reglas de diagramas de estados y de actividades. Revisa además el metamodelo de StarUML: tipos desconocidos, elementos en campos que no los admiten, vistas que el diagrama no admite y líneas sin extremos válidos; y las líneas que atraviesan un contenedor que encapsula (salen de algo anidado hacia afuera sin pasar por un puerto). |
 | `mdj_diff` | Calcula diferencias semánticas y estructurales entre dos archivos `.mdj`. |
 
 ### Edición Segura del Modelo
@@ -116,14 +119,18 @@ Las rutas relativas de `salida`, `carpeta`, `carpeta_salida` y `ruta_codigo` se 
 | `mdj_respaldar` | Crea una copia de respaldo verificada byte por byte. |
 | `mdj_clase_crear` | Crea clases con estereotipo (`boundary`, `control`, `entity`) o actores (`estereotipo: "actor"`), con atributos y documentación. |
 | `mdj_paquete_crear` | Crea un paquete dentro del modelo o de otro paquete. |
-| `mdj_diagrama_crear` | Crea un diagrama vacío de clases, casos de uso o secuencia (con su colaboración, interacción y marco), opcionalmente como el que abre por defecto. |
+| `mdj_diagrama_crear` | Crea un diagrama vacío de cualquiera de los 28 tipos (`despliegue`, `componentes`, `estados`, `bpmn`, `erd`...) con lo que StarUML crea junto con él (interacción y marco, máquina de estados y región, actividad, modelo de datos), opcionalmente como el que abre por defecto. |
+| `mdj_dibujar` | Dibuja un símbolo de la paleta como lo haría StarUML: el elemento de modelo y su vista. Cajas en `x, y` (o en el primer lugar libre), las que van encima de otra con `sobre` (puerto, pin, región) y las líneas con `desde` y `hasta`. |
+| `mdj_diagrama_generar` | Dibuja un diagrama completo de cualquier tipo a partir de listas de elementos (con `dentro` para anidar y `sobre` para pegar puertos, pines o restricciones a una caja o a una línea) y relaciones: acomodo por capas, carriles contiguos (swimlanes, pools y lanes) con el flujo en un solo sentido, `disposicion: "secuencia"` para lifelines y mensajes, contenedores del tamaño de su contenido, marcos que envuelven el diagrama y líneas sin cruces. Avisa cuando una línea sale de un elemento anidado hacia afuera de un contenedor que encapsula (componente, clase, bloque, actividad estructurada). |
+| `mdj_elemento_crear` | Crea un elemento de cualquier tipo de StarUML sin dibujarlo, validado contra el metamodelo (contenedor y propiedades). |
+| `mdj_relacion_crear` | Crea una relación de cualquier tipo (dirigida o con extremos) entre dos elementos sin dibujarla. |
 | `mdj_renombrar` | Renombra un elemento y sincroniza automáticamente las etiquetas de todas sus vistas. |
 | `mdj_documentacion` | Actualiza la documentación o especificación de responsabilidades de un elemento. |
 | `mdj_atributos` | Sincroniza la lista exacta de atributos y actualiza su compartimento visual. |
 | `mdj_asociacion_crear` | Crea asociaciones con multiplicidades, roles, navegabilidad y trazado de ruta visual opcional. |
 | `mdj_asociacion_editar` | Modifica multiplicidades, roles, extremos o navegabilidad de una asociación existente. |
 | `mdj_borrar` | Borrado en cascada: elimina el elemento, sus elementos contenidos, relaciones y vistas asociadas (y lo quita de las listas de referencias, como `constrainedElements`). |
-| `mdj_vista_agregar` | Dibuja la vista de una clase o actor existente en un diagrama en notación estándar o icónica. |
+| `mdj_vista_agregar` | Dibuja un elemento existente en un diagrama: clases y actores en notación estándar o icónica, y cualquier otro elemento o relación con el símbolo de su tipo en la paleta del diagrama. |
 | `mdj_vista_mover` | Ajusta coordenadas y dimensiones de una vista de caja en un diagrama. |
 | `mdj_linea_ruta` | Define los puntos de quiebre de una línea calculando los extremos de conexión con las cajas. |
 | `mdj_linea_etiqueta` | Ajusta la posición de etiquetas de multiplicidad, rol o nombre (alpha y distance). |
@@ -208,6 +215,26 @@ Crea (o completa) el `.mdj` con un paquete del mismo nombre que la carpeta del p
 }
 ```
 
+### 6. Generar un Diagrama de Despliegue
+```json
+{
+  "archivo": "ruta/al/modelo.mdj",
+  "diagrama": "Arquitectura",
+  "elementos": [
+    {"simbolo": "Node", "nombre": "Servidor web"},
+    {"simbolo": "Node", "nombre": "Tomcat", "dentro": "Servidor web"},
+    {"simbolo": "Artifact", "nombre": "tienda.war", "dentro": "Tomcat"},
+    {"simbolo": "Node", "nombre": "Servidor BD"},
+    {"simbolo": "Node", "nombre": "Navegador"}
+  ],
+  "relaciones": [
+    {"simbolo": "Communication Path", "desde": "Navegador", "hasta": "Servidor web", "nombre": "HTTPS"},
+    {"simbolo": "Communication Path", "desde": "Servidor web", "hasta": "Servidor BD", "nombre": "JDBC"}
+  ]
+}
+```
+El diagrama se crea antes con `mdj_diagrama_crear` (`"tipo": "despliegue"`). Los nombres de símbolo son los de la paleta de StarUML; `mdj_catalogo` con `"diagrama": "despliegue"` los lista.
+
 ---
 
 ## Estructura del Repositorio
@@ -217,8 +244,13 @@ Crea (o completa) el `.mdj` con un paquete del mismo nombre que la carpeta del p
 - `staruml_render.py`: Módulo de exportación CLI, rasterizado de alta calidad e inspección de SVG.
 - `staruml_compare.py`: Motor de sincronización, escaneo de código fuente (Java, Python, TypeScript/JavaScript, C#, Kotlin, Go) e ingeniería inversa.
 - `staruml_programa.py`: Diagrama de clases de un programa completo: modelo, acomodo por capas y ruteo de líneas.
+- `staruml_uml.py`: Motor genérico para todos los diagramas y símbolos: instancia plantillas, crea elementos y relaciones validados contra el metamodelo, genera diagramas completos y valida.
+- `staruml_metamodelo.json`: Tabla derivada del metamodelo y de las paletas del StarUML instalado (tipos, herencia, atributos, vistas por diagrama).
+- `plantillas_vistas.json`: Lo que StarUML crea al dibujar cada símbolo de cada paleta y al crear cada tipo de diagrama.
+- `uml_catalogo.md`: Catálogo de diagramas y símbolos con la sección de la especificación UML 2.5.1 de cada uno (generado).
+- `herramientas/`: Scripts que regeneran las tablas y el catálogo desde el StarUML instalado (ver abajo).
 - `reglas.md`: Manual de convenciones de arquitectura, buenas prácticas OOSE y lineamientos de modelado.
-- `tests/`: Suite de pruebas (pytest) con modelos `.mdj` sintéticos.
+- `tests/`: Suite de pruebas (pytest) con modelos `.mdj` sintéticos. `tests/galeria.py` describe un diagrama de cada uno de los 28 tipos con todos los símbolos de su paleta (sirve de ejemplo de cómo pedir cada tipo a `mdj_diagrama_generar`).
 - `PLAN_DE_MEJORA.md`: Hallazgos de las pruebas y estado del plan de mejora.
 
 ---
@@ -238,3 +270,18 @@ python -m pytest tests -q
   `pruebas/`, deja los SVG, PNG e informes en `pruebas/verificacion_staruml/` para revisarlos a ojo.
 - **Modelo real propio:** copia tu `.mdj` a `pruebas/` (carpeta ignorada por git) o define `STARUML_MCP_MODELO_REAL`; `tests/test_modelo_real.py` lo usa automáticamente (siempre sobre copias).
 - La integración continua (`.github/workflows/pruebas.yml`) corre la suite en macOS, Linux y Windows con Python 3.9 y 3.12.
+
+---
+
+## Regenerar las Tablas desde StarUML
+
+Las tablas versionadas salen del StarUML instalado. Para actualizarlas con otra versión de StarUML (cerrada):
+
+```bash
+python herramientas/extraer_metamodelo.py     # staruml_metamodelo.json, desde resources/app.asar
+python herramientas/generar_referencia.py     # StarUML dibuja cada símbolo de cada paleta (pruebas/referencia/)
+python herramientas/extraer_plantillas.py     # plantillas_vistas.json
+python herramientas/generar_catalogo.py       # uml_catalogo.md
+```
+
+`generar_referencia.py` instala en la carpeta de extensiones de usuario de StarUML una extensión pequeña (`herramientas/staruml_extension/mcp-referencia`) y la corre con `StarUML exec`; con `--quitar-extension` la borra al terminar. La especificación UML 2.5.1 de la OMG no se incluye en el repositorio; `uml_catalogo.md` cita sus secciones.

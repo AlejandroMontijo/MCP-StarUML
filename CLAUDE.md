@@ -20,11 +20,16 @@ El repositorio Git en `main` contiene exclusivamente el código fuente oficial y
 
 ```text
 MCP StarUML/
-├── server.py              # Servidor MCP central (34 herramientas registradas)
+├── server.py              # Servidor MCP central (39 herramientas registradas)
 ├── staruml_mdj.py         # Motor de lectura, manipulación JSON, validación y edición segura
 ├── staruml_render.py      # Exportación CLI de StarUML, revisión de SVG y recorte a PNG (Chrome)
 ├── staruml_compare.py     # Comparador de diagramas vs código y generador bidireccional
 ├── staruml_programa.py    # Diagrama de clases de un programa ya hecho (acomodo por capas y ruteo sin cruces)
+├── staruml_uml.py         # Motor generico: todos los diagramas y simbolos de StarUML desde plantillas y metamodelo
+├── staruml_metamodelo.json # Tabla derivada del metamodelo y las paletas del StarUML instalado (generada)
+├── plantillas_vistas.json # Lo que StarUML crea por cada simbolo de cada paleta y por cada tipo de diagrama (generada)
+├── uml_catalogo.md        # Catalogo de diagramas y simbolos con secciones de UML 2.5.1 (generado)
+├── herramientas/          # Scripts que regeneran las tablas, la extension de StarUML que dibuja la referencia y el catalogo
 ├── reglas.md              # Convenciones de modelado, OOSE, secuencias y arquitectura
 ├── README.md              # Documentación genérica y profesional para open source
 ├── CLAUDE.md              # Este archivo de memoria y contexto para Claude Code
@@ -79,6 +84,38 @@ MCP StarUML/
 - Fase 3 completa: bitácora por `stderr` (`STARUML_MCP_LOG_LEVEL`), coherencia caso de uso ↔ paquete de robustez, generador C#, parsers de Kotlin y Go, auto-mensajes en `mdj_secuencia_generar`, y lectura (`mdj_comportamiento`) y validación de diagramas de estados y de actividades.
 - La geometría de los auto-mensajes sigue la forma estándar de UML; falta confirmarla abriendo el archivo en StarUML.
 - `staruml_programa_a_diagrama` (v2.1.0) dibuja el diagrama de clases de un programa Java completo. Las vistas de enumeración y de realización de interfaz siguen el metamodelo de StarUML pero solo se confirman con `tests/test_staruml_real.py` en una máquina con StarUML. La regla "en análisis no se ponen métodos" de `reglas_oose` aplica solo a boundary, control, entity y actores, así que esas clases de diseño no se marcan.
+
+## 3c. Todos los diagramas y simbolos de StarUML (2026-10-01, v2.2.0)
+
+- Fuentes: el metamodelo y las paletas (`toolbox/*.json`) salen del `resources/app.asar` de StarUML 6.3.1
+  (`herramientas/extraer_metamodelo.py`). Las plantillas las dibuja el propio StarUML: la extension
+  `herramientas/staruml_extension/mcp-referencia` corre con `StarUML exec semilla.mdj -c mcp:dibujar-todo`
+  (`herramientas/generar_referencia.py`) y `herramientas/extraer_plantillas.py` saca cada simbolo de
+  `pruebas/referencia/referencia.mdj`. La especificacion OMG UML 2.5.1 no se versiona; `uml_catalogo.md` cita sus secciones.
+- 28 tipos de diagrama y 419 simbolos con plantilla. Sin plantilla: Interface Realization en SysML BDD y Constraint
+  Parameter en SysML parametrico (StarUML los rechaza en un dibujo generico).
+- Marcadores de plantilla: `@n` (objetos propios), `@diagrama`, `@dueno` / `@dueno2...` (contenedor del diagrama y sus
+  ancestros), `@cola` / `@cabeza` (+ `_m` para su elemento), rutas como `@dueno/regions/0` o `@cabeza/>tail/>model`
+  ('>' sigue una referencia, '..' sube) y `@ext:` (se resuelve por tipo y nombre, p. ej. estereotipos del perfil).
+- Detalles de StarUML 6.3.1 descubiertos al generar la referencia: `exec` se cae (codigo 127) si recibe `-a`, asi que la
+  extension lee `plan.json` junto al `.mdj`; los dialogos de confirmacion bloquean la ventana oculta (la extension los
+  contesta y aplica antes el perfil estandar); el simbolo Frame abre un selector de elemento (se crea por la fabrica);
+  una contencion de un elemento en si mismo lo saca del arbol y StarUML ya no lo guarda.
+- El metamodelo de StarUML no marca tipos abstractos ni exige el tipo declarado de cada campo (guarda manejadores de
+  excepcion en `Activity.edges`); `staruml_uml.es_abstracto` lo infiere y `validar_metamodelo` solo exige que el campo exista.
+- Galeria (`tests/galeria.py`, `tests/test_galeria.py`): un diagrama de cada tipo con todos los simbolos de su paleta,
+  construido con `mdj_diagrama_generar`. Con StarUML, `test_staruml_dibuja_la_galeria` exporta los 28 y no deja pasar de
+  `MAX_OBSERVACIONES_GALERIA` (13) observaciones de `svg_revisar`; las que quedan son etiquetas de lineas sobre nombres de
+  contenedores (sujeto, paquete), sobre una activacion o sobre la etiqueta de un puerto, y lineas largas entre elementos
+  anidados de raices distintas (no se rutean, van rectas).
+- `mdj_diagrama_generar`: carriles en bandas (`_capas_flujo`, camino mas largo), disposicion `secuencia`, `sobre` hacia
+  lineas, claves de relaciones y vistas existentes (`@marco`), marcos que envuelven todo al final, entrada lateral a
+  figuras con el nombre abajo (`_ruta_lateral`) y aviso de lineas que atraviesan contenedores que encapsulan
+  (`ENCAPSULAN`); `mdj_validar` hace la misma revision en cualquier diagrama (`lineas_que_salen`).
+- `svg_revisar` respeta `dominant-baseline` (StarUML usa `central` y `text-before-edge`), mide los textos girados con su
+  matriz y no cuenta como linea el dibujo propio de una figura sin nada adentro.
+- `tests/test_staruml_real.py::test_staruml_dibuja_los_auto_mensajes` ya fallaba antes de este cambio (etiquetas de
+  auto-mensajes sobre activaciones en el StarUML real): la geometria de los auto-mensajes sigue pendiente.
 
 ## 4. Convenciones y Reglas Inquebrantables
 
