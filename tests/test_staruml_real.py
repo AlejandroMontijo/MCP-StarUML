@@ -167,3 +167,70 @@ def test_staruml_dibuja_el_diagrama_de_un_programa(tmp_path, staruml):
         archivos.append(png)
     guardar_para_revision(*archivos, informe=rev, nombre_informe='programa_svg_revisar.json')
     assert not [p for p in rev['problemas'] if p.startswith('LINEA CRUZA CAJA')], rev['problemas']
+
+
+def test_staruml_abre_y_dibuja_todos_los_tipos_de_diagrama(vacio, tmp_path, staruml):
+    """Un archivo con los 28 tipos de diagrama y cada simbolo de cada paleta, hecho con las plantillas: el StarUML
+    verdadero lo abre y exporta cada diagrama, con los nombres de los simbolos en el SVG."""
+    import staruml_uml as U
+    from apoyo import poblar_paleta
+    doc = M.Doc(vacio)
+    for tipo in sorted(U.plantillas()['diagramas']):
+        dg, _ = U.crear_diagrama(doc, tipo, 'D_' + tipo)
+        _, fallas = poblar_paleta(doc, dg)
+        assert not fallas, (tipo, fallas)
+    doc.save(backup=False)
+    r = ok(tool('staruml_exportar', archivo=vacio, carpeta=str(tmp_path / 'svg')))
+    nombres = {os.path.splitext(os.path.basename(a))[0] for a in r['archivos']}
+    faltan = sorted(f'D_{t}' for t in U.plantillas()['diagramas'] if f'D_{t}' not in nombres)
+    assert not faltan, f'StarUML no exporto {faltan}'
+    for a in r['archivos']:
+        if os.path.basename(a).startswith('D_'):
+            texto = open(a, encoding='utf-8').read()
+            assert '<svg' in texto and len(texto) > 500, a
+    guardar_para_revision(vacio, *[a for a in r['archivos'] if os.path.basename(a).startswith('D_')])
+
+
+def test_staruml_dibuja_un_despliegue_generado(vacio, tmp_path, staruml):
+    dg = ok(tool('mdj_diagrama_crear', archivo=vacio, tipo='despliegue', nombre='Arquitectura'))['diagrama']
+    ok(tool('mdj_diagrama_generar', archivo=vacio, diagrama=dg, elementos=[
+        {'simbolo': 'Node', 'nombre': 'Servidor web'},
+        {'simbolo': 'Node', 'nombre': 'Tomcat', 'dentro': 'Servidor web'},
+        {'simbolo': 'Artifact', 'nombre': 'tienda.war', 'dentro': 'Tomcat'},
+        {'simbolo': 'Node', 'nombre': 'Servidor BD'},
+        {'simbolo': 'Node', 'nombre': 'Navegador'}],
+        relaciones=[{'simbolo': 'Communication Path', 'desde': 'Navegador', 'hasta': 'Servidor web'},
+                    {'simbolo': 'Communication Path', 'desde': 'Servidor web', 'hasta': 'Servidor BD'}]))
+    svg = ok(tool('staruml_exportar', archivo=vacio, carpeta=str(tmp_path / 'svg'), diagrama='Arquitectura'))['archivos'][0]
+    texto = open(svg, encoding='utf-8').read()
+    for n in ('Servidor web', 'Tomcat', 'tienda.war', 'Servidor BD', 'Navegador'):
+        assert n in texto, f'StarUML no dibujo {n}'
+    rev = ok(tool('svg_revisar', archivo=vacio, svg=svg, diagrama='Arquitectura'))
+    assert not [p for p in rev['problemas'] if p.startswith('LINEA CRUZA CAJA')], rev['problemas']
+    guardar_para_revision(svg, informe=rev, nombre_informe='despliegue_svg_revisar.json')
+
+
+# observaciones de svg_revisar que quedan en la galeria (etiquetas de lineas que StarUML pone sobre nombres de
+# contenedores o activaciones); la prueba evita que el acomodo empeore
+MAX_OBSERVACIONES_GALERIA = 13
+
+
+def test_staruml_dibuja_la_galeria(tmp_path, staruml):
+    """Un diagrama de cada tipo con todos los simbolos de su paleta: StarUML exporta los 28 y svg_revisar no
+    encuentra mas observaciones que las conocidas."""
+    import galeria as G
+    from apoyo import guardar_json, proyecto_vacio
+    archivo = guardar_json(proyecto_vacio('Galeria'), str(tmp_path / 'galeria.mdj'))
+    G.construir(lambda _h, **a: ok(tool(_h, **a)), archivo)
+    r = ok(tool('staruml_exportar', archivo=archivo, carpeta=str(tmp_path / 'svg')))
+    nombres = {os.path.splitext(os.path.basename(a))[0]: a for a in r['archivos']}
+    faltan = [g['nombre'] for g in G.GALERIA if g['nombre'] not in nombres]
+    assert not faltan, f'StarUML no exporto {faltan}'
+    informe, total = {}, 0
+    for g in G.GALERIA:
+        rev = ok(tool('svg_revisar', archivo=archivo, svg=nombres[g['nombre']], diagrama=g['nombre']))
+        informe[g['nombre']] = rev['problemas']
+        total += rev['n_problemas']
+    guardar_para_revision(archivo, *[nombres[g['nombre']] for g in G.GALERIA], informe=informe,
+                          nombre_informe='galeria_svg_revisar.json')
+    assert total <= MAX_OBSERVACIONES_GALERIA, informe

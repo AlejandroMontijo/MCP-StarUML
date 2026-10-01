@@ -26,6 +26,8 @@ ENV/
 scratch/
 pruebas/
 respaldos/
+# copia local de la especificacion OMG (no se redistribuye)
+referencias/
 
 
 # pytest

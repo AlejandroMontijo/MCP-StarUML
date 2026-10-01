@@ -24,10 +24,27 @@ from collections import Counter
 HERE = os.path.dirname(os.path.abspath(__file__))
 BACKUP_DIR = os.environ.get('STARUML_MCP_BACKUP_DIR', os.path.join(HERE, 'respaldos'))
 
-VIEW_TYPES_BOX = ('UMLClassView', 'UMLActorView', 'UMLNoteView', 'UMLUseCaseView', 'UMLInterfaceView',
-                  'UMLUseCaseSubjectView', 'UMLPackageView', 'UMLComponentView')
-EDGE_TYPES = ('UMLAssociationView', 'UMLGeneralizationView', 'UMLDependencyView', 'UMLRealizationView',
-              'UMLNoteLinkView', 'UMLInterfaceRealizationView', 'UMLIncludeView', 'UMLExtendView')
+_TIPOS = {}
+
+
+def tipos_staruml():
+    """Tipos del metamodelo de StarUML (staruml_metamodelo.json): {tipo: {'super': ...}}. Vacio si no esta."""
+    if 'tipos' not in _TIPOS:
+        try:
+            with open(os.path.join(HERE, 'staruml_metamodelo.json'), encoding='utf-8') as f:
+                _TIPOS['tipos'] = json.load(f)['tipos']
+        except (OSError, ValueError, KeyError):
+            _TIPOS['tipos'] = {}
+    return _TIPOS['tipos']
+
+
+def es_subtipo(t, base):
+    tipos = tipos_staruml()
+    while t:
+        if t == base:
+            return True
+        t = tipos.get(t, {}).get('super')
+    return False
 
 
 class MdjError(Exception):
@@ -180,7 +197,8 @@ class Doc:
         if spec in self.ids and self.ids[spec] is not None:
             return self.ids[spec]
         tipo = None
-        if isinstance(spec, str) and ':' in spec and spec.split(':', 1)[0].startswith('UML'):
+        if isinstance(spec, str) and ':' in spec and (spec.split(':', 1)[0].startswith('UML')
+                                                      or spec.split(':', 1)[0] in tipos_staruml()):
             tipo, spec = spec.split(':', 1)
         cands = [o for o in self.ids.values() if o and o.get('name') == spec
                  and (tipo is None or o['_type'] == tipo) and (types is None or o['_type'] in types)
@@ -436,12 +454,13 @@ def geometria(doc, diagrama):
     cajas, lineas = [], []
     for v in dg.get('ownedViews', []):
         t = v['_type']
-        if t in VIEW_TYPES_BOX or t == 'UMLSeqLifelineView':
+        # cajas y lineas por herencia en el metamodelo de StarUML: sirve para cualquier tipo de diagrama
+        if es_subtipo(t, 'NodeView') and all(isinstance(v.get(k), (int, float)) for k in ('left', 'top', 'width', 'height')):
             m = v.get('model')
             cajas.append({'vista': v['_id'], 'tipo': t, 'elemento': doc.name_of(m['$ref']) if isinstance(m, dict) else 'NOTA',
                           'x': v.get('left'), 'y': v.get('top'), 'ancho': v.get('width'), 'alto': v.get('height'),
                           **({'texto': v.get('text', '')[:80]} if t == 'UMLNoteView' else {})})
-        elif t in EDGE_TYPES:
+        elif es_subtipo(t, 'EdgeView'):
             tl = doc.ids.get(v.get('tail', {}).get('$ref')); hd = doc.ids.get(v.get('head', {}).get('$ref'))
             nm = lambda x: doc.name_of(x['model']['$ref']) if x and isinstance(x.get('model'), dict) else 'nota'
             lineas.append({'vista': v['_id'], 'tipo': t, 'modelo': v.get('model', {}).get('$ref'),
