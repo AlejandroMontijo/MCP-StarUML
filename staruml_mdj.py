@@ -1935,16 +1935,20 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
             ex = x0 + AUTO_ETIQUETA
             etiquetas = ((ex, y + 1), (ex, y - 14), (ex, y + AUTO_ALTO + 2))
             actividad = (act_izq, act_top, alto[k])
+            # StarUML coloca el nombre con alpha/distance desde el tramo vertical del lazo (no con left/top): hacia
+            # la derecha y a medio ancho, para que no quede encima de la activacion
+            nombre_alpha, nombre_dist = 1.5707963267948966, round(lw / 2 + 8)
             puntos = f'{x0}:{y};{x0 + AUTO_ANCHO}:{y};{x0 + AUTO_ANCHO}:{y + AUTO_ALTO};{x0 + 7}:{y + AUTO_ALTO}'
         else:
             etiquetas = ((round(mx - lw / 2), y - 16 if xt > xo else y + 3), (round(mx), y - 31), (round(mx), y + 4))
             actividad = (xt - 7, y, 25 if rep else alto[k])
             puntos = f'{xo}:{y};{xt}:{y}'
+            nombre_alpha, nombre_dist = 1.5707963267948966, 10
         v = {'_type': 'UMLSeqMessageView', '_id': vid, '_parent': ref(dg['_id']), 'model': ref(mid),
              'subViews': [
                  {'_type': 'EdgeLabelView', '_id': sv[0], '_parent': ref(vid), 'model': ref(mid), 'font': 'Arial;13;0',
                   'parentStyle': True, 'left': etiquetas[0][0], 'top': etiquetas[0][1], 'width': lw, 'height': 13,
-                  'alpha': 1.5707963267948966, 'distance': 10, 'hostEdge': ref(vid), 'edgePosition': 1, 'text': texto},
+                  'alpha': nombre_alpha, 'distance': nombre_dist, 'hostEdge': ref(vid), 'edgePosition': 1, 'text': texto},
                  {'_type': 'EdgeLabelView', '_id': sv[1], '_parent': ref(vid), 'model': ref(mid), 'visible': False,
                   'font': 'Arial;13;0', 'parentStyle': True, 'left': etiquetas[1][0], 'top': etiquetas[1][1], 'height': 13,
                   'alpha': 1.5707963267948966, 'distance': 25, 'hostEdge': ref(vid), 'edgePosition': 1},

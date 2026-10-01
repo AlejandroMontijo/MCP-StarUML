@@ -521,11 +521,32 @@ def _acomodar_lo_que_crea(doc, nuevos, v):
     cx, cy = _centro_linea(v)
     pts = [tuple(map(float, p.split(':'))) for p in v['points'].split(';')]
     vertical = abs(pts[-1][1] - pts[0][1]) > abs(pts[-1][0] - pts[0][0])
+    dg = doc.ids.get(dg_id) or {}
+    propias = {id(c) for c in cajas}
+    otras_cajas = [o for o in dg.get('ownedViews', []) if _es_caja(o) and id(o) not in propias
+                   and not o.get('_type', '').endswith('FrameView')]
+
+    import staruml_programa as P
+    propias_l = {id(doc.ids[i]) for i in nuevos.values() if doc.ids.get(i) is not None}
+    tramos = [(a, b) for o in dg.get('ownedViews', []) if es_linea(o.get('_type', '')) and id(o) not in propias_l
+              and isinstance(o.get('points'), str)
+              for a, b in zip(P._puntos(o), P._puntos(o)[1:])]
+    tramos += list(zip(P._puntos(v), P._puntos(v)[1:]))  # tampoco sobre su propia linea
+
+    def choca(x, y, w, h):
+        if any(P._cruza(a, b, (x, y, x + w, y + h), 8) for a, b in tramos):
+            return True
+        return any(x < o['left'] + o['width'] + 15 and o['left'] < x + w + 15 and
+                   y < o['top'] + o['height'] + 15 and o['top'] < y + h + 15 for o in otras_cajas)
     for c in cajas:
-        if vertical:
-            _desplazar(c, round(cx + 60 - c['left']), round(cy - c['height'] / 2 - c['top']))
-        else:
-            _desplazar(c, round(cx - c['width'] / 2 - c['left']), round(cy + 50 - c['top']))
+        w, h = c['width'], c['height']
+        # a un lado del centro de la linea; si ahi hay otra caja, el lugar libre mas cercano alrededor
+        base = (cx + 60, cy - h / 2) if vertical else (cx - w / 2, cy + 50)
+        lugares = [base] + sorted(((cx + dx, cy + dy) for dx in range(-400, 401, 40) for dy in range(-300, 301, 30)),
+                                  key=lambda q: abs(q[0] + w / 2 - cx) + abs(q[1] + h / 2 - cy))
+        x, y = next(((x, y) for x, y in lugares if not choca(x, y, w, h)), base)
+        _desplazar(c, round(x - c['left']), round(y - c['top']))
+        otras_cajas.append(c)
     # la linea principal ya tiene sus puntos: solo las demas (el enlace punteado de la clase asociacion)
     otras = {k: i for k, i in nuevos.items() if doc.ids.get(i) is not v}
     _rutear(doc, otras, None, ())
@@ -892,6 +913,10 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
         if 'simbolo' not in e:
             raise MdjError(f'elemento {i}: falta simbolo')
         clave, p = plantilla_simbolo(tipo_dg, e['simbolo'])
+        if clave.split('|')[1] in ('UMLBoundary', 'UMLControl', 'UMLEntity'):
+            # sus iconos se deforman si se les da tamano, no muestran atributos y la paleta de clases no trae actor
+            raise MdjError('Para un diagrama de analisis (boundary, control, entity) usa mdj_robustez_generar: '
+                           'acomoda actor, pantallas, control y entidades como se dibujan en robustez')
         k = str(e.get('clave') or e.get('nombre') or f'#{i}')
         if k in claves:
             raise MdjError(f'Hay dos elementos con la clave "{k}": usa "clave" para distinguirlos')
@@ -1190,7 +1215,12 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
     sentido = {frozenset(par): par for geo in geometrias for par in list(geo['cadenas']) + geo['mismas']}
     lineas, cruzan, avisos = [], [], []
     y_msj = 180
-    for rel in rels:
+
+    def crea_caja(rel):
+        return any(e['padre'] == '@diagrama' and not es_linea(e['objeto']['_type']) for e in rel['_p']['objetos'])
+    # las que crean una caja (clase asociacion) al final: su caja busca lugar cuando ya estan las demas lineas
+    orden = rels if disposicion == 'secuencia' else sorted(rels, key=crea_caja)
+    for rel in orden:
         a, b = claves.get(str(rel.get('desde'))), claves.get(str(rel.get('hasta')))
         va = vista_de_ref(rel['desde']) if rel.get('desde') is not None else None
         vb = vista_de_ref(rel['hasta']) if rel.get('hasta') is not None else None
@@ -1448,6 +1478,12 @@ def lineas_que_salen(doc):
     return avisos
 
 
+# la paleta comun de StarUML (notas, texto, figuras libres, imagenes, enlaces) va en cualquier diagrama
+COMUNES = {'UMLNoteView', 'UMLNoteLinkView', 'UMLTextView', 'UMLCustomTextView', 'UMLCustomNoteView', 'UMLFrameView',
+           'UMLCustomFrameView', 'FreelineEdgeView', 'ImageView', 'RectangleView', 'RoundRectView', 'EllipseView',
+           'HyperlinkView', 'ShapeView', 'UMLConstraintView', 'UMLConstraintLinkView'}
+
+
 def _vistas_de_paleta(tipo_dg):
     """Tipos de vista que StarUML pone directamente en el diagrama al dibujar los simbolos de su paleta."""
     clave = ('vistas_paleta', tipo_dg)
@@ -1499,7 +1535,7 @@ def validar_metamodelo(doc):
     for dg in doc.diagrams():
         # vistas que admite el diagrama: las del metamodelo mas las que dibuja su paleta (la lista del metamodelo
         # esta incompleta en varios diagramas, p. ej. BPMN)
-        permitidas = set((tipo(dg['_type']) or {}).get('views') or []) | _vistas_de_paleta(dg['_type'])
+        permitidas = set((tipo(dg['_type']) or {}).get('views') or []) | _vistas_de_paleta(dg['_type']) | COMUNES
         for v in dg.get('ownedViews', []):
             t = v.get('_type')
             if permitidas and t in tipos and not any(es_subtipo(t, p) for p in permitidas):

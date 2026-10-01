@@ -18,7 +18,8 @@ def test_la_galeria_cubre_todos_los_tipos_y_todos_los_simbolos():
     assert sorted(tipos) == sorted(U.plantillas()['diagramas']), 'un diagrama por cada tipo'
     for g, t in zip(G.GALERIA, tipos):
         paleta = {c.split('|')[0] for c in U.plantillas()['plantillas'][t]}
-        assert G.simbolos_usados(g) == paleta, (g['nombre'], paleta ^ G.simbolos_usados(g))
+        usados = G.simbolos_usados(g) | (G.SIMBOLOS_ROBUSTEZ if t == 'UMLClassDiagram' else set())
+        assert usados == paleta, (g['nombre'], paleta ^ usados)
 
 
 @pytest.fixture(scope='module')
@@ -38,13 +39,17 @@ def galeria(tmp_path_factory):
 
 def test_la_galeria_se_construye_integra(galeria):
     archivo, res = galeria
-    assert len(res) == 28
+    assert len(res) == 29  # 28 tipos + el de robustez
     assert ids_integros(archivo)
     v = ok(tool('mdj_validar', archivo=archivo, oose=False))
     assert v['metamodelo'] == []
     assert v['lineas_que_atraviesan_contenedores'] == []
     for nombre, r in res.items():
         assert not r.get('avisos'), (nombre, r['avisos'])
+    # las reglas OOSE revisan todo el archivo; del diagrama de robustez no debe salir nada (los demas no son OOSE)
+    oose = res['G29 Robustez']['oose']
+    assert not [x for x in oose['problemas'] + oose['avisos'] if 'G29' in x]
+    assert not [x for x in oose['avisos'] if 'cajas encimadas' in x], oose['avisos']
     doc = M.Doc(archivo)
     nombres = {d.get('name') for d in doc.diagrams()}
     assert {g['nombre'] for g in G.GALERIA} <= nombres

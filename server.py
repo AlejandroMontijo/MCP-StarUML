@@ -17,6 +17,7 @@ import staruml_render as R       # noqa: E402
 import staruml_compare as C      # noqa: E402
 import staruml_programa as P     # noqa: E402
 import staruml_uml as U          # noqa: E402
+import staruml_robustez as RB    # noqa: E402
 
 VERSION = '2.2.0'
 PROTOCOLOS = ('2025-06-18', '2025-03-26', '2024-11-05')
@@ -30,6 +31,7 @@ INSTRUCCIONES = (
     'Las de edicion respaldan antes de escribir, no escriben si StarUML esta abierto y validan al terminar. '
     'Llama a staruml_reglas para ver las convenciones (UML, OOSE, secuencias, lineas y codigo). '
     'Flujo tipico: mdj_resumen -> mdj_modelo / mdj_secuencia -> staruml_ver_visual -> staruml_comparar_codigo -> editar -> mdj_validar. '
+    'Diagrama de analisis (robustez) de un caso de uso: mdj_robustez_generar. '
     'Cualquier tipo de diagrama de StarUML (componentes, despliegue, estados, actividades, BPMN, ERD, C4, SysML...): '
     'mdj_catalogo -> mdj_diagrama_crear -> mdj_diagrama_generar o mdj_dibujar -> staruml_ver_visual -> mdj_validar.')
 
@@ -486,6 +488,43 @@ def t_dibujar(a):
 def t_diagrama_generar(a):
     doc = M.Doc(a['archivo'])
     r = U.generar_diagrama(doc, a['diagrama'], a['elementos'], a.get('relaciones') or [], a.get('disposicion') or 'capas')
+    return escribir(doc, a, r)
+
+
+@tool('mdj_robustez_generar', 'Dibuja el diagrama de analisis (robustez, OOSE) de un caso de uso con la disposicion '
+      'clasica: actor a la izquierda, pantallas (boundary) en columna con su nota opcional, un control y a la derecha el '
+      'modelo de dominio (entidades por capas segun la navegabilidad, lineas ruteadas sin cruzar cajas). Crea los '
+      'elementos que falten en el paquete (o reusa los que ya existen), con atributos solo en las entidades, y dibuja '
+      'actor-pantalla y pantalla-control rectas con flecha y las asociaciones entre entidades con flecha, multiplicidad '
+      'y rol. Control-entidad solo con lineas_control. Para boundary, control y entity usa esta herramienta en lugar de '
+      'mdj_diagrama_generar.',
+      obj({'archivo': ARCHIVO, 'diagrama': S(description='Diagrama de clases (vacio) donde se dibuja'),
+           'paquete': S(description='Paquete donde quedan los elementos'),
+           'actores': {'type': 'array', 'items': obj({'nombre': S(), 'documentacion': S(),
+                                                      'pantallas': {'type': 'array', 'items': S(),
+                                                                    'description': 'Las que usa (default: todas)'}},
+                                                     ['nombre'])},
+           'pantallas': {'type': 'array', 'description': 'Boundaries, de arriba abajo',
+                         'items': obj({'nombre': S(), 'documentacion': S(),
+                                       'nota': S(description='Texto de una nota debajo de la pantalla')}, ['nombre'])},
+           'control': obj({'nombre': S(), 'documentacion': S()}, ['nombre']),
+           'entidades': {'type': 'array', 'description': 'Las que usa el control, en el orden del flujo; las que solo se '
+                                                         'alcanzan desde otra, con depende_de',
+                         'items': obj({'nombre': S(), 'atributos': {'type': 'array', 'items': S()},
+                                       'documentacion': S(), 'depende_de': S()}, ['nombre'])},
+           'asociaciones': {'type': 'array', 'description': 'Entre entidades',
+                            'items': obj({'desde': S(), 'hasta': S(), 'mult_desde': S(), 'mult_hacia': S(),
+                                          'rol_desde': S(), 'rol_hacia': S(),
+                                          'navegable': S(enum=['hacia', 'ambos', 'ninguno', 'desde'])},
+                                         ['desde', 'hasta'])},
+           'lineas_control': B(description='Dibujar tambien control -> entidad (default false)'),
+           'salida': SALIDA, 'forzar': FORZAR},
+          ['archivo', 'diagrama', 'paquete', 'actores', 'pantallas', 'control', 'entidades']), rw('Generar robustez'))
+def t_robustez_generar(a):
+    doc = M.Doc(a['archivo'])
+    r = RB.generar_robustez(doc, a['diagrama'], a['paquete'], a['actores'], a['pantallas'], a['control'],
+                            a['entidades'], a.get('asociaciones') or [], bool(a.get('lineas_control')))
+    r['oose'] = M.reglas_oose(doc)
     return escribir(doc, a, r)
 
 

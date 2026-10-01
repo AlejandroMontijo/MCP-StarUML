@@ -23,7 +23,6 @@ GALERIA = [
         E('Port', 'api', sobre='ServicioPedidos'), E('Part', 'repositorio', sobre='ServicioPedidos'),
         E('Interface', 'IPagable'), E('Enumeration', 'EstadoPedido'), E('DataType', 'Direccion'),
         E('PrimitiveType', 'Moneda'), E('Signal', 'PedidoConfirmado'),
-        E('Boundary', 'PantallaPedido'), E('Control', 'ControlPedido'), E('Entity', 'RegistroPedido'),
         E('Collaboration', 'Observador'), E('Collaboration Use', 'avisosPedido'),
         E('N-ary Association Node', 'Envio'),
         E('Object', 'pedido1'), E('Object', 'cliente1'), E('Object', 'producto1'),
@@ -385,6 +384,21 @@ GALERIA = [
 ]
 
 
+# boundary, control y entity de la paleta de clases van con mdj_robustez_generar (diagrama de analisis)
+ROBUSTEZ = dict(nombre='G29 Robustez', paquete='Analisis de la tienda',
+                actores=[{'nombre': 'Cliente'}],
+                pantallas=[{'nombre': 'PantallaCatalogo'}, {'nombre': 'PantallaCarrito'}, {'nombre': 'PantallaPago'}],
+                control={'nombre': 'ControlComprar'},
+                entidades=[{'nombre': 'Carrito', 'atributos': ['fecha', 'total']},
+                           {'nombre': 'Producto', 'atributos': ['clave', 'precio']},
+                           {'nombre': 'Pedido', 'atributos': ['folio', 'estado']},
+                           {'nombre': 'LineaCarrito', 'atributos': ['cantidad'], 'depende_de': 'Carrito'}],
+                asociaciones=[{'desde': 'Carrito', 'hasta': 'LineaCarrito', 'mult_desde': '1', 'mult_hacia': '1..*'},
+                              {'desde': 'LineaCarrito', 'hasta': 'Producto', 'mult_desde': '0..*', 'mult_hacia': '1'},
+                              {'desde': 'Carrito', 'hasta': 'Pedido', 'mult_desde': '1', 'mult_hacia': '0..1'}])
+SIMBOLOS_ROBUSTEZ = {'Boundary', 'Control', 'Entity'}
+
+
 def construir(tool, archivo):
     """Crea cada diagrama de la galeria en el archivo con las herramientas MCP (tool(nombre, **args)). Devuelve
     {nombre: resultado de mdj_diagrama_generar (+ los extra)}."""
@@ -405,6 +419,11 @@ def construir(tool, archivo):
             r.setdefault('avisos', []).extend(r2.get('avisos', []))
             r['lineas_que_cruzan_cajas'] += r2['lineas_que_cruzan_cajas']
         res[g['nombre']] = r
+    rb = dict(ROBUSTEZ)
+    tool('mdj_paquete_crear', archivo=archivo, nombre=rb['paquete'])
+    dg = tool('mdj_diagrama_crear', archivo=archivo, tipo='clases', nombre=rb.pop('nombre'),
+              dentro_de=rb['paquete'])['diagrama']
+    res[ROBUSTEZ['nombre']] = tool('mdj_robustez_generar', archivo=archivo, diagrama=dg, **rb)
     return res
 
 
