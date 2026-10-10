@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Servidor MCP para StarUML (.mdj). Sin dependencias: JSON-RPC 2.0 por stdio.
-#   claude mcp add staruml -- python3 "/ruta/a/MCP StarUML/server.py"
+# El cliente MCP lo arranca con: python3 "/ruta/a/MCP StarUML/server.py"
 import base64
 import json
 import logging
@@ -220,7 +220,7 @@ def t_diff(a):
 @tool('staruml_exportar', 'Exporta diagramas con el CLI de StarUML (svg por defecto). diagrama = nombre o id; omitido o '
       '"todos" exporta todos. Tiene limite de tiempo.',
       obj({'archivo': ARCHIVO, 'carpeta': S(description='Carpeta de salida'), 'diagrama': S(),
-           'formato': S(enum=['svg', 'png', 'jpeg', 'pdf'])}, ['archivo', 'carpeta']), rw('Exportar'))
+           'formato': S(enum=['svg', 'png', 'jpeg', 'pdf'])}, ['archivo', 'carpeta']), rw('Exportar', destructive=True))
 def t_exportar(a):
     return R.exportar(a['archivo'], a['carpeta'], a.get('diagrama'), a.get('formato') or 'svg')
 
@@ -234,8 +234,11 @@ def t_svg_revisar(a):
 
 @tool('svg_recortar', 'Recorta una zona de un SVG a PNG con Chrome headless y devuelve la imagen para verla. '
       'x, y, ancho y alto en pixeles del SVG; sin ancho/alto toma todo. max_lado reduce la imagen (default 1600).',
-      obj({'svg': S(), 'x': N(), 'y': N(), 'ancho': N(), 'alto': N(), 'salida': S(description='Guardar el PNG aqui'),
-           'max_lado': N(), 'devolver_imagen': B(description='default true')}, ['svg']), rw('Recortar SVG'))
+      obj({'svg': S(), 'x': N(), 'y': N(), 'ancho': N(), 'alto': N(),
+           'salida': S(description='Guardar el PNG aqui (termina en .png; reemplaza un PNG que ya exista, '
+                                   'nunca otro tipo de archivo)'),
+           'max_lado': N(), 'devolver_imagen': B(description='default true')}, ['svg']),
+      rw('Recortar SVG', destructive=True))
 def t_svg_recortar(a):
     r = R.recortar(a['svg'], a.get('x') or 0, a.get('y') or 0, a.get('ancho'), a.get('alto'), a.get('salida'),
                    a.get('max_lado', 1600))
@@ -251,13 +254,13 @@ def t_svg_recortar(a):
 # ---------------------------------------------------------------------------
 
 @tool('staruml_ver_visual', 'Visualiza un diagrama como imagen PNG de alta resolucion. '
-      'Devuelve la imagen y sus metadatos directamente para que el asistente y el usuario puedan ver e inspeccionar '
-      'visualmente el diseno.',
+      'Devuelve la imagen y sus metadatos para revisar el diseno a simple vista.',
       obj({'archivo': ARCHIVO, 'diagrama': S(description='Nombre o id del diagrama a visualizar'),
-           'salida': S(description='Ruta opcional para guardar el archivo PNG generado'),
+           'salida': S(description='Ruta opcional para guardar el PNG (termina en .png; reemplaza un PNG que ya '
+                                   'exista, nunca otro tipo de archivo)'),
            'max_lado': N(description='Lado maximo en pixeles (default 1600 para balance optimo)'),
            'forzar': B(description='Forzar re-exportacion aunque exista cache')},
-          ['archivo', 'diagrama']), rw('Ver diagrama visual'))
+          ['archivo', 'diagrama']), rw('Ver diagrama visual', destructive=True))
 def t_ver_visual(a):
     r = R.ver_visual(a['archivo'], a['diagrama'], salida=a.get('salida'),
                      max_lado=a.get('max_lado', 1600), forzar=bool(a.get('forzar')))
@@ -306,13 +309,17 @@ def t_diagrama_a_codigo(a):
 
 @tool('staruml_codigo_a_diagrama', 'Importa clases e interfaces, atributos con su tipo y metodos desde codigo fuente (Java, '
       'Python, TypeScript/JavaScript, C#, Kotlin, Go) hacia un paquete del .mdj y, si se da diagrama, las dibuja sin encimarlas. '
+      'Solo agrega lo que falta: nunca quita clases, atributos ni metodos. Cada clase se busca solo en el paquete pedido; '
+      'si corresponde a mas de una, no se toca y se avisa. '
       'A boundary, control y entity no se les agregan metodos (analisis de robustez).',
       obj({'archivo': ARCHIVO, 'ruta_codigo': S(description='Carpeta o archivo de codigo fuente a importar'),
            'paquete': S(description='Nombre o id del paquete destino en el .mdj'),
            'diagrama': S(description='Opcional: nombre del diagrama de clases donde agregarlas visualmente'),
            'lenguaje': S(enum=['auto', 'java', 'python', 'typescript', 'csharp', 'kotlin', 'go']),
-           'modo': S(enum=['agregar', 'sincronizar'], description='agregar (default): solo agrega lo que falte; '
-                                                                 'sincronizar: deja exactamente lo del codigo y reporta lo quitado'),
+           'modo': S(enum=['agregar', 'sincronizar'],
+                     description='agregar (default): agrega lo que falte y completa los tipos vacios; sincronizar: '
+                                 'ademas reemplaza el tipo de los atributos que ya tienen otro y reporta, sin quitarlo, '
+                                 'lo que el codigo ya no tiene'),
            'metodos': B(description='Importar tambien los metodos (default true)'),
            'salida': SALIDA, 'forzar': FORZAR},
           ['archivo', 'ruta_codigo', 'paquete']), rw('Importar codigo a diagrama', destructive=True))
@@ -372,7 +379,13 @@ def t_programa_a_diagrama(a):
         info = P.programa_a_diagrama(doc, a['ruta_codigo'], por_defecto=nuevo, **opciones)
         info['archivo_nuevo'] = nuevo
         if info['diagrama_por'] == 'programa' and info['diagramas'][0]['cajas'] > P.LIMITE_UN_DIAGRAMA:
-            info['aviso'] = 'El programa es grande para un solo diagrama; con diagrama_por="paquete" queda uno por paquete.'
+            # partir por paquete solo sirve si las clases estan en varios paquetes; si no, saldria el mismo diagrama
+            if len(info.get('paquetes_con_clases') or ()) > 1:
+                info['aviso'] = ('El programa es grande para un solo diagrama; con diagrama_por="paquete" queda uno '
+                                 'por paquete.')
+            else:
+                info['aviso'] = ('El programa es grande para un solo diagrama, pero sus clases no estan repartidas en '
+                                 'varios paquetes: diagrama_por="paquete" no lo partiria.')
         return escribir(doc, dict(a, salida=a.get('salida') or archivo) if nuevo else a, info)
     finally:
         if tmp:
@@ -383,7 +396,9 @@ def t_programa_a_diagrama(a):
 # Edicion
 # ---------------------------------------------------------------------------
 
-@tool('mdj_respaldar', 'Copia el .mdj a la carpeta de respaldos (o a la indicada) y confirma que quedo identico.',
+@tool('mdj_respaldar', 'Copia el .mdj a la carpeta de respaldos (o a la indicada) y confirma que quedo identico. '
+      'En la carpeta de respaldos se guardan los ultimos STARUML_MCP_BACKUP_KEEP de cada archivo (100 por omision); '
+      'en una carpeta indicada no se borra nada.',
       obj({'archivo': ARCHIVO, 'carpeta': S()}, ['archivo']), rw('Respaldar'))
 def t_respaldar(a):
     return {'respaldo': M.backup_file(os.path.abspath(os.path.expanduser(a['archivo'])), a.get('carpeta'))}
@@ -432,8 +447,9 @@ def t_paquete_crear(a):
       'Con por_defecto=true queda como el que abre StarUML.',
       obj({'archivo': ARCHIVO, 'tipo': S(), 'nombre': S(),
            'dentro_de': S(description='Nombre o id del modelo, paquete u otro contenedor padre (default: el modelo raiz)'),
-           'por_defecto': B(description='Abrirlo por defecto al cargar el archivo'), 'salida': SALIDA, 'forzar': FORZAR},
-          ['archivo', 'tipo', 'nombre']), rw('Crear diagrama'))
+           'por_defecto': B(description='Abrirlo por defecto al cargar el archivo (el que abria antes deja de hacerlo)'),
+           'salida': SALIDA, 'forzar': FORZAR},
+          ['archivo', 'tipo', 'nombre']), rw('Crear diagrama', destructive=True))
 def t_diagrama_crear(a):
     doc = M.Doc(a['archivo'])
     dg, avisos = U.crear_diagrama(doc, a['tipo'], a['nombre'], a.get('dentro_de'), bool(a.get('por_defecto')))
@@ -519,7 +535,7 @@ def t_relacion_crear(a):
 
 @tool('mdj_renombrar', 'Cambia el nombre de un elemento (id, nombre o Tipo:Nombre) y el texto de su nombre en todas sus vistas.',
       obj({'archivo': ARCHIVO, 'elemento': S(), 'nuevo_nombre': S(), 'salida': SALIDA, 'forzar': FORZAR},
-          ['archivo', 'elemento', 'nuevo_nombre']), rw('Renombrar'))
+          ['archivo', 'elemento', 'nuevo_nombre']), rw('Renombrar', destructive=True))
 def t_renombrar(a):
     doc = M.Doc(a['archivo'])
     el = doc.find(a['elemento'])
@@ -556,7 +572,7 @@ def t_renombrar(a):
 
 @tool('mdj_documentacion', 'Pone el texto de Documentation de un elemento (responsabilidad de la clase, por ejemplo).',
       obj({'archivo': ARCHIVO, 'elemento': S(), 'texto': S(), 'salida': SALIDA, 'forzar': FORZAR},
-          ['archivo', 'elemento', 'texto']), rw('Documentacion'))
+          ['archivo', 'elemento', 'texto']), rw('Documentacion', destructive=True))
 def t_documentacion(a):
     doc = M.Doc(a['archivo'])
     el = doc.find(a['elemento'])
@@ -567,7 +583,7 @@ def t_documentacion(a):
 @tool('mdj_atributos', 'Deja la lista de atributos de una clase exactamente como se indica (conserva los ids de los que ya '
       'existian, crea los nuevos, quita los que sobran) y rehace el compartimento de atributos en todas sus vistas.',
       obj({'archivo': ARCHIVO, 'clase': S(), 'atributos': {'type': 'array', 'items': {'type': 'string'}},
-           'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'clase', 'atributos']), rw('Atributos'))
+           'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'clase', 'atributos']), rw('Atributos', destructive=True))
 def t_atributos(a):
     doc = M.Doc(a['archivo'])
     c = doc.find(a['clase'], types=('UMLClass',))
@@ -577,21 +593,44 @@ def t_atributos(a):
     return escribir(doc, a, {'quitados': quitados})
 
 
-@tool('mdj_asociacion_crear', 'Crea una asociacion entre dos clases o actores, con multiplicidades, roles y navegabilidad '
-      '("hacia" = flecha al segundo, "ambos", "ninguno", "desde"). Si se da diagrama, tambien la dibuja entre sus vistas '
-      'con los puntos intermedios indicados.',
+EXTREMOS_ASOCIACION = ('UMLClass', 'UMLActor', 'UMLInterface')
+
+
+def _extremo_asociacion(doc, spec, campo):
+    try:
+        return doc.find(spec, types=EXTREMOS_ASOCIACION)
+    except M.MdjError as e:
+        raise M.MdjError(f'"{campo}": {e}. Los extremos de una asociacion son clases, actores o interfaces '
+                         '(para otros elementos usa mdj_relacion_crear o mdj_dibujar)') from None
+
+
+def _duenio_asociacion(doc, spec):
+    """Paquete (modelo, subsistema...) o clasificador donde se guarda la asociacion; nunca un diagrama, un atributo..."""
+    tipos = {t for t in M.tipos_staruml() if M.es_subtipo(t, 'UMLPackage') or M.es_subtipo(t, 'UMLClassifier')}
+    tipos.update(('UMLModel', 'UMLPackage', 'UMLSubsystem') + EXTREMOS_ASOCIACION)
+    try:
+        return doc.find(spec, types=tuple(sorted(tipos)))
+    except M.MdjError:
+        el = doc.find(spec)  # si no existe o es ambiguo, ese es el error
+        raise M.MdjError(f'"duenio": {el.get("name") or spec} es {el["_type"]}; una asociacion solo puede guardarse '
+                         'en un paquete o en un clasificador (clase, actor, interfaz...)') from None
+
+
+@tool('mdj_asociacion_crear', 'Crea una asociacion entre dos clases, actores o interfaces, con multiplicidades, roles y '
+      'navegabilidad ("hacia" = flecha al segundo, "ambos", "ninguno", "desde"). Si se da diagrama, tambien la dibuja '
+      'entre sus vistas con los puntos intermedios indicados.',
       obj({'archivo': ARCHIVO, 'desde': S(), 'hacia': S(), 'mult_desde': S(), 'mult_hacia': S(), 'rol_desde': S(),
            'rol_hacia': S(), 'navegable': S(enum=['hacia', 'ambos', 'ninguno', 'desde']), 'duenio': S(),
            'diagrama': S(), 'puntos': PUNTOS, 'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'desde', 'hacia']),
       rw('Crear asociacion'))
 def t_asoc_crear(a):
     doc = M.Doc(a['archivo'])
-    x, y = doc.find(a['desde']), doc.find(a['hacia'])
+    x, y = _extremo_asociacion(doc, a['desde'], 'desde'), _extremo_asociacion(doc, a['hacia'], 'hacia')
     ka, kb = doc.kind(x), doc.kind(y)
     avisos = []
     if {ka, kb} == {'boundary', 'entity'} or ka == kb == 'boundary' or {ka, kb} == {'control', 'actor'}:
         avisos.append(f'Ojo: {ka}--{kb} no es valido en OOSE')
-    du = doc.find(a['duenio']) if a.get('duenio') else x
+    du = _duenio_asociacion(doc, a['duenio']) if a.get('duenio') else x
     asoc = M.asociacion_crear(doc, x, y, a.get('mult_desde', ''), a.get('mult_hacia', ''), a.get('rol_desde', ''),
                               a.get('rol_hacia', ''), a.get('navegable') or 'hacia', du)
     extra = {'asociacion': asoc['_id'], 'avisos': avisos}
@@ -605,18 +644,19 @@ def t_asoc_crear(a):
 @tool('mdj_asociacion_editar', 'Cambia multiplicidad, rol, navegabilidad o la clase de un extremo (1 o 2) de una asociacion '
       'existente, y actualiza las etiquetas en sus vistas. Cadena vacia borra la multiplicidad o el rol.',
       obj({'archivo': ARCHIVO, 'asociacion': S(description='id de la asociacion'), 'extremo': N(enum=[1, 2]),
-           'mult': S(), 'rol': S(), 'navegable': B(), 'clase': S(description='mover el extremo a esta clase'),
+           'mult': S(), 'rol': S(), 'navegable': B(),
+           'clase': S(description='mover el extremo a esta clase, actor o interfaz'),
            'duenio': S(description='mover la asociacion a este dueno'), 'salida': SALIDA, 'forzar': FORZAR},
-          ['archivo', 'asociacion', 'extremo']), rw('Editar asociacion'))
+          ['archivo', 'asociacion', 'extremo']), rw('Editar asociacion', destructive=True))
 def t_asoc_editar(a):
     doc = M.Doc(a['archivo'])
     asoc = doc.get(a['asociacion'])
     if asoc['_type'] != 'UMLAssociation':
         raise M.MdjError('Ese id no es una asociacion')
     quitadas = M.asociacion_editar(doc, asoc, int(a['extremo']), a.get('mult'), a.get('rol'), a.get('navegable'),
-                                   doc.find(a['clase']) if a.get('clase') else None)
+                                   _extremo_asociacion(doc, a['clase'], 'clase') if a.get('clase') else None)
     if a.get('duenio'):
-        nuevo = doc.find(a['duenio'])
+        nuevo = _duenio_asociacion(doc, a['duenio'])
         viejo = doc.get(doc.parent[asoc['_id']])
         viejo['ownedElements'] = [e for e in viejo.get('ownedElements', []) if e['_id'] != asoc['_id']]
         if not viejo['ownedElements']:
@@ -662,25 +702,34 @@ def t_vista_agregar(a):
 
 
 @tool('mdj_vista_mover', 'Mueve y/o cambia el tamano de la vista de un elemento (o de una vista por su id) dentro de un '
-      'diagrama. Las lineas se reacomodan solas en StarUML; si tienen puntos intermedios, revisalas con mdj_linea_ruta.',
+      'diagrama; lo que no se indica queda igual. En una entity el alto no baja de lo que piden sus atributos (si el '
+      'pedido no alcanza, avisa). Las lineas se reacomodan solas en StarUML; si tienen puntos intermedios, revisalas '
+      'con mdj_linea_ruta.',
       obj({'archivo': ARCHIVO, 'diagrama': S(), 'elemento': S(description='id de vista, id o nombre del elemento'),
            'x': N(), 'y': N(), 'ancho': N(), 'alto': N(), 'salida': SALIDA, 'forzar': FORZAR},
-          ['archivo', 'diagrama', 'elemento']), rw('Mover vista'))
+          ['archivo', 'diagrama', 'elemento']), rw('Mover vista', destructive=True))
 def t_vista_mover(a):
     doc = M.Doc(a['archivo'])
     dg = doc.diagram(a['diagrama'])
     v = doc.view_in(dg, a['elemento'])
     M.mover_vista(v, a.get('x'), a.get('y'), a.get('ancho'), a.get('alto'))
     m = v.get('model')
+    extra = {}
     if isinstance(m, dict) and doc.ids.get(m['$ref']) and doc.kind(doc.ids[m['$ref']]) == 'entity':
-        M.rehacer_atributos_vista(doc, v, doc.ids[m['$ref']])
-    return escribir(doc, a, {'vista': v['_id'], 'x': v['left'], 'y': v['top'], 'ancho': v['width'], 'alto': v['height']})
+        # el alto que tenia (o el pedido) se conserva; solo crece si no le caben los atributos
+        M.rehacer_atributos_vista(doc, v, doc.ids[m['$ref']], conservar_alto=True)
+        if a.get('alto') is not None and v['height'] != a['alto']:
+            extra['aviso'] = (f'El alto pedido ({a["alto"]}) no alcanza para los atributos de la clase; '
+                              f'quedo en {v["height"]}')
+    extra.update({'vista': v['_id'], 'x': v['left'], 'y': v['top'], 'ancho': v['width'], 'alto': v['height']})
+    return escribir(doc, a, extra)
 
 
 @tool('mdj_linea_ruta', 'Pone los puntos intermedios de una linea (vista de asociacion u otra) y calcula sus extremos igual que '
       'StarUML. Para tramos rectos, el primer/ultimo punto intermedio debe alinearse con el centro de su caja.',
       obj({'archivo': ARCHIVO, 'diagrama': S(), 'linea': S(description='id de la vista de la linea o id del modelo'),
-           'puntos': PUNTOS, 'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'diagrama', 'linea']), rw('Ruta de linea'))
+           'puntos': PUNTOS, 'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'diagrama', 'linea']),
+      rw('Ruta de linea', destructive=True))
 def t_linea_ruta(a):
     doc = M.Doc(a['archivo'])
     dg = doc.diagram(a['diagrama'])
@@ -697,7 +746,7 @@ def t_linea_ruta(a):
       obj({'archivo': ARCHIVO, 'linea': S(description='id de la vista de la linea'),
            'etiqueta': S(enum=['tailMultiplicityLabel', 'headMultiplicityLabel', 'tailRoleNameLabel', 'headRoleNameLabel', 'nameLabel']),
            'alpha': N(), 'distancia': N(), 'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'linea', 'etiqueta']),
-      rw('Mover etiqueta'))
+      rw('Mover etiqueta', destructive=True))
 def t_linea_etiqueta(a):
     doc = M.Doc(a['archivo'])
     v = doc.get(a['linea'])
@@ -715,7 +764,7 @@ def t_linea_etiqueta(a):
       '(cada renglon de Arial 11 ocupa 11 px).',
       obj({'archivo': ARCHIVO, 'diagrama': S(), 'texto': S(), 'x': N(), 'y': N(), 'ancho': N(), 'alto': N(),
            'vista': S(description='id de una nota existente para editarla'), 'salida': SALIDA, 'forzar': FORZAR},
-          ['archivo', 'diagrama', 'texto', 'x', 'y', 'ancho']), rw('Nota'))
+          ['archivo', 'diagrama', 'texto', 'x', 'y', 'ancho']), rw('Nota', destructive=True))
 def t_nota(a):
     doc = M.Doc(a['archivo'])
     dg = doc.diagram(a['diagrama'])
@@ -736,7 +785,8 @@ def t_nota(a):
                                                       ['de', 'a', 'nombre'])},
            'opciones': {'type': 'object', 'description': 'y_inicio, espaciado [a,b], espaciado_izq_der [a,b], extra_flujo [a,b], '
                                                          'semilla, margen_etiqueta, separacion_minima'},
-           'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'diagrama', 'lifelines', 'mensajes']), rw('Generar secuencia', True))
+           'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'diagrama', 'lifelines', 'mensajes']),
+      rw('Generar secuencia', destructive=True))
 def t_sec_generar(a):
     doc = M.Doc(a['archivo'])
     info = M.generar_secuencia(doc, a['diagrama'], a['lifelines'], a['mensajes'], a.get('opciones'))
@@ -808,7 +858,7 @@ def _error(mid, code, message):
 
 def _texto_json(out):
     text = json.dumps(out, ensure_ascii=False, indent=1)
-    # respuestas grandes en JSON compacto: la sangria las infla ~40 % y se comen el contexto del asistente
+    # respuestas grandes en JSON compacto: la sangria las infla ~40 % y el cliente las tiene que leer completas
     return text if len(text) <= 20000 else json.dumps(out, ensure_ascii=False, separators=(',', ':'))
 
 
@@ -908,16 +958,34 @@ def configurar_log():
     log.info('staruml-mcp %s con Python %s', VERSION, sys.version.split()[0])
 
 
+def _lineas_de_entrada():
+    """Lineas de stdin como texto. Se leen en bytes y se decodifican como UTF-8 una por una (MCP habla UTF-8; en
+    Windows las tuberias usarian cp1252 y los acentos llegarian como mojibake). Una linea que no es UTF-8 valido
+    sale como None, para contestarla con un error y seguir con la siguiente."""
+    for crudo in getattr(sys.stdin, 'buffer', sys.stdin):  # sin buffer si stdin fue reemplazado (p. ej. en pruebas)
+        if isinstance(crudo, bytes):
+            try:
+                crudo = crudo.decode('utf-8')
+            except UnicodeDecodeError:
+                log.warning('linea que no es UTF-8 valido: %r', crudo[:200])
+                yield None
+                continue
+        yield crudo
+
+
 def main():
-    # MCP habla UTF-8. Sin esto, en Windows Python usa la pagina de codigos del sistema (cp1252) en las tuberias:
-    # los acentos llegan como mojibake y se guardan asi en el .mdj
-    if hasattr(sys.stdin, 'reconfigure'):  # no existe si stdin fue reemplazado (p. ej. en pruebas)
-        sys.stdin.reconfigure(encoding='utf-8')
-        sys.stdout.reconfigure(encoding='utf-8', newline='\n')
+    # MCP habla UTF-8 (en Windows la tuberia usaria cp1252). Un surrogate suelto (llega escapado como \udxxx en el
+    # JSON y vuelve en la respuesta) sale como el mismo escape, que sigue siendo JSON valido; en modo estricto
+    # tumbaria el servidor
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='backslashreplace', newline='\n')
     if hasattr(sys.stderr, 'reconfigure'):
         sys.stderr.reconfigure(encoding='utf-8', errors='backslashreplace')
     configurar_log()
-    for line in sys.stdin:
+    for line in _lineas_de_entrada():
+        if line is None:
+            send(_error(None, -32700, 'La linea no es UTF-8 valido'))
+            continue
         line = line.strip()
         if not line:
             continue

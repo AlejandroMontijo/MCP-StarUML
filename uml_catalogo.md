@@ -2,7 +2,9 @@
 
 Generado con `herramientas/generar_catalogo.py` a partir de StarUML 6.3.1. Las descripciones son propias. Las secciones citadas son de la especificacion [OMG UML 2.5.1](https://www.omg.org/spec/UML/2.5.1/PDF), que no se incluye en el repositorio.
 
-Cada simbolo listado se puede dibujar con `mdj_dibujar` (por su etiqueta de paleta) y cada diagrama se puede crear con `mdj_diagrama_crear` (por su nombre corto o su tipo de StarUML). `mdj_catalogo` da la misma informacion en JSON. En las lineas, el ejemplo es el par de vistas con que StarUML la dibujo en la referencia; cualquier otro par que StarUML acepte tambien sirve.
+Cada simbolo listado se puede dibujar con `mdj_dibujar` (por su etiqueta de paleta) y cada diagrama se puede crear con `mdj_diagrama_crear` (por su nombre corto o su tipo de StarUML). `mdj_catalogo` da la misma informacion en JSON. En las lineas, el ejemplo es el par de vistas con que StarUML la dibujo en la referencia; cualquier otro par que StarUML acepte tambien sirve (`mdj_dibujar` no lo comprueba). Los mensajes de secuencia, aunque el ejemplo llegue a un `UMLEndpointView`, entre dos lifelines van de la linea punteada de una a la de la otra: `desde` y `hasta` aceptan la lifeline.
+
+El nombre va donde StarUML lo muestra: en las restricciones de tiempo y de duracion es el rango `{min..max}` (`0..5s`), en el invariante de estado su condicion, en la anotacion de texto de BPMN su texto, en la relacion de C4 su descripcion y en el uso de interaccion la interaccion a la que se refiere (`ref X`; si no hay una con ese nombre se crea vacia). Los simbolos cuyo nombre StarUML no dibuja (nodos inicial, final, de decision, fusion, bifurcacion y union, region interrumpible, pseudoestados, endpoint, gate, marcas y segmentos de tiempo, contencion, ramas del mapa mental y varios de wireframe, diagrama de flujo y BPMN) y el marco (`Frame`, que muestra el elemento al que pertenece el diagrama) se dibujan igual, con un aviso.
 
 | Diagrama | Nombre corto | Tipo StarUML | Familia | Especificacion | Simbolos |
 |---|---|---|---|---|---|

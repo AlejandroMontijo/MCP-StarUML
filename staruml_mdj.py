@@ -98,14 +98,36 @@ def chrome_bin():
                                'msedge', 'microsoft-edge'))
 
 
+# el ejecutable de la aplicacion: dentro del .app en macOS; staruml o la AppImage en Linux
+_EXE_MAC = re.compile(r'StarUML\.app/Contents/MacOS/StarUML(?=\s|$)', re.I)
+_EXE_LINUX = re.compile(r'(?:^|/)(?:staruml|StarUML[^/]*?\.AppImage)(?=\s|$)', re.I)
+
+
+def _es_carpeta_del_ejecutable(previo):
+    """True si lo que hay antes del nombre del ejecutable es solo su carpeta, y no otro programa con argumentos
+    (python3 /x/StarUML MCP/server.py, vim /x/staruml notas.txt). La carpeta puede tener espacios
+    (/Volumes/StarUML 6.2.2/StarUML.app/...): se acepta si es una ruta absoluta sin opciones ni separadores de la
+    shell y ningun tramo inicial hasta un espacio es un archivo (ese seria el programa que de verdad corre)."""
+    if not re.search(r'\s', previo):
+        return True
+    if not previo.startswith('/') or re.search(r'\s(?:-\S|~)|[;|&`$]', previo):
+        return False
+    # el ejecutable de otra aplicacion de macOS seguido de argumentos (.../Python.app/Contents/MacOS/Python /x/...)
+    if re.search(r'\.app/Contents/MacOS/[^/\s]+\s', previo):
+        return False
+    return not any(os.path.isfile(previo[:m.start()]) for m in re.finditer(r'\s', previo))
+
+
 def es_gui_staruml(cmd):
     """True si la linea de comando es la aplicacion de StarUML: macOS (StarUML.app), Linux (/opt/StarUML/staruml,
-    AppImage). No cuentan las exportaciones por CLI (staruml image ...) ni los procesos auxiliares de Electron."""
-    m = re.search(r'(StarUML\.app/Contents/MacOS/StarUML|/staruml|StarUML[^/]*\.AppImage)(?=\s|$)(.*)$', cmd, re.I)
-    if not m:
+    AppImage). El ejecutable tiene que ir al inicio de la linea: no cuenta otro programa que solo lo menciona en sus
+    argumentos. Tampoco las exportaciones por CLI (staruml image ...) ni los procesos auxiliares de Electron."""
+    cmd = cmd.strip()
+    m = _EXE_MAC.search(cmd) or _EXE_LINUX.search(cmd)
+    if not m or not _es_carpeta_del_ejecutable(cmd[:m.start()]):
         return False
-    args = m.group(2).split()
-    return not args or (args[0].lower() not in ('image', 'html', 'ejs', 'exec')
+    args = cmd[m.end():].split()
+    return not args or (args[0].lower() not in ('image', 'html', 'ejs', 'exec', 'pdf')
                         and not any(a.startswith('--type=') for a in args))
 
 
@@ -191,11 +213,15 @@ class Doc:
 
     # --- busqueda ---
     def find(self, spec, types=None):
-        """Busca un elemento por id o por nombre. 'Tipo:Nombre' limita el tipo (p. ej. UMLClass:Cliente)."""
+        """Busca un elemento por id o por nombre. 'Tipo:Nombre' limita el tipo (p. ej. UMLClass:Cliente); types limita
+        los tipos aceptados, tambien cuando se da un id."""
         if isinstance(spec, dict):
             spec = spec.get('$ref')
         if spec in self.ids and self.ids[spec] is not None:
-            return self.ids[spec]
+            o = self.ids[spec]
+            if types is not None and o['_type'] not in types:
+                raise MdjError(f'{spec} es {o["_type"]} ({o.get("name") or "sin nombre"}); se esperaba {" o ".join(types)}')
+            return o
         tipo = None
         if isinstance(spec, str) and ':' in spec and (spec.split(':', 1)[0].startswith('UML')
                                                       or spec.split(':', 1)[0] in tipos_staruml()):
@@ -319,6 +345,9 @@ class Doc:
 
 
 def backup_file(path, folder=None):
+    """Copia el archivo a la carpeta de respaldos (o a la indicada) y revisa que quede identico. Los respaldos viejos
+    solo se rotan en la carpeta de respaldos del servidor: en una carpeta indicada no se borra nada."""
+    rotar = folder is None
     folder = folder or BACKUP_DIR
     os.makedirs(folder, exist_ok=True)
     base = os.path.splitext(os.path.basename(path))[0]
@@ -336,7 +365,7 @@ def backup_file(path, folder=None):
         keep = int(os.environ.get('STARUML_MCP_BACKUP_KEEP', '100'))
     except ValueError:
         keep = 100
-    if keep > 0:
+    if keep > 0 and rotar:
         patron = re.compile(re.escape(base) + r'_\d{8}_\d{6}(_\d+)?\.mdj$')
         propios = sorted((f for f in os.listdir(folder) if patron.match(f)),
                          key=lambda f: os.path.getmtime(os.path.join(folder, f)))
@@ -1144,7 +1173,14 @@ def mover_vista(v, left=None, top=None, width=None, height=None):
         v['height'] = height
 
 
-def rehacer_atributos_vista(doc, v, cls):
+def alto_minimo_atributos(n):
+    """Alto que necesita la vista de una clase para mostrar n atributos."""
+    return 73 + 15 * n
+
+
+def rehacer_atributos_vista(doc, v, cls, conservar_alto=False):
+    """Rehace el compartimento de atributos de la vista. El alto se ajusta a los atributos (cuando estos cambian);
+    con conservar_alto se deja el que tenga la vista y solo crece si no le caben."""
     acv = [s for s in v.get('subViews', []) if s['_type'] == 'UMLAttributeCompartmentView']
     if not acv:
         return
@@ -1162,7 +1198,8 @@ def rehacer_atributos_vista(doc, v, cls):
                   'text': _texto_atributo(doc, a), 'horizontalAlignment': 0})
         subs.append(s)
     acv['subViews'] = subs
-    v['height'] = max(v['height'] if n == 0 else 0, 73 + 15 * n)
+    minimo = alto_minimo_atributos(n)
+    v['height'] = max(v['height'], minimo) if (conservar_alto or n == 0) else minimo
 
 
 def _texto_atributo(doc, a):
@@ -1232,6 +1269,8 @@ def nota(doc, dg, texto, x, y, ancho, alto=None, vista=None):
         if not nv:
             raise MdjError(f'No hay vista {vista} en {dg.get("name")}')
         nv = nv[0]
+        if nv['_type'] != 'UMLNoteView':
+            raise MdjError(f'{vista} es {nv["_type"]}, no una nota')
     else:
         nv = {'_type': 'UMLNoteView', '_id': doc.new_id(), '_parent': ref(dg['_id']), 'font': 'Arial;11;0', 'parentStyle': False}
         dg.setdefault('ownedViews', []).append(nv)
@@ -1578,17 +1617,28 @@ def borrar(doc, el):
         elif o['_type'] in ('UMLGeneralization', 'UMLRealization', 'UMLDependency', 'UMLInterfaceRealization', 'UMLInclude', 'UMLExtend') \
                 and (o['source']['$ref'] in quitar or o['target']['$ref'] in quitar):
             junta(o)
-    vistas = set()
-    for dg in doc.diagrams():
-        for v in dg.get('ownedViews', []):
-            m = v.get('model')
-            if isinstance(m, dict) and m.get('$ref') in quitar:
-                vistas.add(v['_id'])
-    # lineas cuyas cajas se van
-    for dg in doc.diagrams():
-        for v in dg.get('ownedViews', []):
-            if v.get('tail', {}).get('$ref') in vistas or v.get('head', {}).get('$ref') in vistas:
-                vistas.add(v['_id'])
+    # vistas a cualquier profundidad (las de atributos y operaciones van dentro de los compartimentos de la clase)
+    # y las lineas cuyos extremos se van; 'dentro' junta los ids de esas vistas y de todo lo que llevan
+    vistas, dentro = set(), set()
+    otra_vuelta = True
+    while otra_vuelta:
+        otra_vuelta = False
+        for dg in doc.diagrams():
+            pila = list(dg.get('ownedViews', []))
+            while pila:
+                v = pila.pop()
+                if not isinstance(v, dict) or v.get('_id') in dentro:
+                    continue
+                if any(isinstance(v.get(k), dict) and v[k].get('$ref') in (quitar if k == 'model' else dentro)
+                       for k in ('model', 'tail', 'head')):
+                    vistas.add(v['_id'])
+                    dentro.update(_ids_y_refs(v)[0])
+                    otra_vuelta = True
+                    continue
+                pila.extend(v.get('subViews', []))
+    # clases que se quedan sin alguno de sus atributos: su compartimento se rehace al final
+    con_atributos_quitados = {doc.parent[i] for i in quitar if doc.ids.get(i) and doc.ids[i]['_type'] == 'UMLAttribute'
+                              and doc.parent.get(i) not in quitar}
 
     def poda(o):
         if isinstance(o, dict):
@@ -1608,7 +1658,7 @@ def borrar(doc, el):
     # listas de referencias (constrainedElements, containedViews...) pierden esa entrada;
     # cualquier otra referencia es un problema y no se deja pasar
     tipos_vaciados, colgantes, refs_quitadas = [], [], []
-    borrado = lambda x: isinstance(x, dict) and set(x) == {'$ref'} and (x['$ref'] in quitar or x['$ref'] in vistas)
+    borrado = lambda x: isinstance(x, dict) and set(x) == {'$ref'} and (x['$ref'] in quitar or x['$ref'] in dentro)
 
     def revisa(o, path=''):
         if isinstance(o, dict):
@@ -1630,6 +1680,10 @@ def borrar(doc, el):
     revisa(doc.d)
     if colgantes:
         raise MdjError('No se puede borrar sin dejar referencias colgantes: ' + '; '.join(colgantes[:8]))
+    for cid in con_atributos_quitados:
+        if doc.ids.get(cid):
+            for _, v in doc.views_of(cid):
+                rehacer_atributos_vista(doc, v, doc.ids[cid])
     return {'elementos_borrados': len(quitar), 'vistas_borradas': len(vistas), 'tipos_vaciados': tipos_vaciados,
             'referencias_quitadas': refs_quitadas}
 
@@ -1692,8 +1746,8 @@ def _opciones_secuencia(opciones):
 
 def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
     """Rehace por completo un diagrama de secuencia.
-    lifelines: [{'clave': 'asesor', 'tipo': 'Asesor de Renta'}, ...] en orden de izquierda a derecha.
-    mensajes: [{'de': clave, 'a': clave, 'nombre': 'buscarCliente(rfc)', 'reply': False, 'flujo': 'F1'}, ...]
+    lifelines: [{'clave': 'usr', 'tipo': 'Usuario'}, ...] en orden de izquierda a derecha.
+    mensajes: [{'de': clave, 'a': clave, 'nombre': 'buscarCuenta(id)', 'reply': False, 'flujo': 'F1'}, ...]
     Un mensaje con 'de' == 'a' es un auto-mensaje: se dibuja como lazo a la derecha con su activacion anidada.
     """
     op = _opciones_secuencia(opciones)
@@ -1936,15 +1990,20 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
             etiquetas = ((ex, y + 1), (ex, y - 14), (ex, y + AUTO_ALTO + 2))
             actividad = (act_izq, act_top, alto[k])
             puntos = f'{x0}:{y};{x0 + AUTO_ANCHO}:{y};{x0 + AUTO_ANCHO}:{y + AUTO_ALTO};{x0 + 7}:{y + AUTO_ALTO}'
+            # StarUML no usa left/top: centra la etiqueta a 'distance' del tramo vertical del lazo (x0 + AUTO_ANCHO).
+            # Con medio ancho de mas, su borde izquierdo queda en x0 + AUTO_ETIQUETA, donde lo supone caja_etiqueta;
+            # con 10 fijo una etiqueta ancha queda mitad a la izquierda, sobre la activacion de quien llama
+            distancia = round(lw / 2 + AUTO_ETIQUETA - AUTO_ANCHO, 2)
         else:
             etiquetas = ((round(mx - lw / 2), y - 16 if xt > xo else y + 3), (round(mx), y - 31), (round(mx), y + 4))
             actividad = (xt - 7, y, 25 if rep else alto[k])
             puntos = f'{xo}:{y};{xt}:{y}'
+            distancia = 10
         v = {'_type': 'UMLSeqMessageView', '_id': vid, '_parent': ref(dg['_id']), 'model': ref(mid),
              'subViews': [
                  {'_type': 'EdgeLabelView', '_id': sv[0], '_parent': ref(vid), 'model': ref(mid), 'font': 'Arial;13;0',
                   'parentStyle': True, 'left': etiquetas[0][0], 'top': etiquetas[0][1], 'width': lw, 'height': 13,
-                  'alpha': 1.5707963267948966, 'distance': 10, 'hostEdge': ref(vid), 'edgePosition': 1, 'text': texto},
+                  'alpha': 1.5707963267948966, 'distance': distancia, 'hostEdge': ref(vid), 'edgePosition': 1, 'text': texto},
                  {'_type': 'EdgeLabelView', '_id': sv[1], '_parent': ref(vid), 'model': ref(mid), 'visible': False,
                   'font': 'Arial;13;0', 'parentStyle': True, 'left': etiquetas[1][0], 'top': etiquetas[1][1], 'height': 13,
                   'alpha': 1.5707963267948966, 'distance': 25, 'hostEdge': ref(vid), 'edgePosition': 1},

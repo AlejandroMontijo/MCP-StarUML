@@ -79,6 +79,15 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
 - Lifelines: height = fin - 40; linePart top = 106 y height = h - 66. El marco se ajusta
   al contenido.
 - Una lifeline sin nombre con rol tipado se ve como ": Tipo".
+- Con `mdj_dibujar`, `mdj_vista_agregar` y `mdj_diagrama_generar` los mensajes llegan a la
+  línea punteada de la lifeline de destino (si llegan a la caja, StarUML corta la flecha en
+  su borde y no dibuja la activación). La lifeline que crea un mensaje de creación empieza
+  a la altura de ese mensaje.
+- `mdj_diagrama_generar` con `disposicion='secuencia'`: las lifelines nuevas van a la
+  derecha de las que ya tenga el diagrama, separadas según el nombre más largo (con su
+  número) de los mensajes entre ellas; los mensajes nuevos van debajo del último que ya
+  haya y las lifelines anteriores se alargan hasta ellos. Una restricción de tiempo sobre
+  un mensaje va junto a su origen, del lado contrario a su nombre.
 
 ## Diagramas de estados y de actividades
 
@@ -109,6 +118,36 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
 - Anidar es contener también en el modelo: un artefacto dibujado dentro de un nodo es
   del nodo, un subestado está en la región de su estado compuesto, una acción dentro de
   una partición está en la partición. `mdj_diagrama_generar` lo hace con `dentro`.
+- `sobre` es para lo que va pegado a otra vista (puertos, pines, nodos de expansión,
+  eventos de borde, invariantes de estado, auto-mensajes y auto-transiciones, lo de un
+  diagrama de tiempos, restricciones de tiempo); la columna Notas de `uml_catalogo.md` dice
+  sobre qué va cada símbolo. Las regiones de un estado se hacen con `Orthogonal State` y
+  las particiones con `Swimlane (...)`, con lo de adentro en `dentro`.
+- `mdj_elemento_crear` y `mdj_relacion_crear` guardan cada cosa donde la guarda StarUML:
+  columnas en `columns`, atributos en `attributes`, literales en `literals`, estados en su
+  región (`vertices`), lifelines y mensajes en la interacción (`participants`, `messages`),
+  transiciones en la región (`transitions`) y flujos en la actividad (`edges`). Si un tipo
+  cabe en varios campos igual de válidos (`entryActivities`, `doActivities` o
+  `exitActivities` de un estado; `parts`, `values`... de un bloque SysML), se pide `campo`.
+  Los diagramas se crean con `mdj_diagrama_crear`, que crea también su interacción, máquina
+  de estados o actividad: `mdj_elemento_crear` no crea diagramas, el proyecto ni extremos
+  de relación, y `mdj_dibujar` no dibuja en un diagrama que no está donde StarUML lo pondría.
+- `mdj_vista_agregar` dibuja un elemento que ya existe con el símbolo que le corresponde
+  (estado simple o compuesto, transición o auto-transición, mensaje según su `messageSort`,
+  parte o propiedad de restricción...). Una relación se dibuja entre las vistas de sus
+  extremos: `desde` y `hasta` se pueden omitir y, si se dan, deben ser esas vistas.
+- El nombre de un símbolo va donde StarUML lo muestra: el rango `{min..max}` de las
+  restricciones de tiempo y duración, la condición del invariante, el texto de la anotación
+  BPMN, la descripción de la relación C4, la interacción de un uso de interacción. Si
+  StarUML no lo muestra (nodos inicial y final, decisiones, pseudoestados, marcos...), se
+  avisa: `avisos` en `mdj_dibujar` y `nombres_no_visibles` en `mdj_diagrama_generar`.
+- `mdj_diagrama_generar` rutea las líneas de primer nivel para que eviten las cajas y lista
+  en `lineas_que_cruzan_cajas` las que aun así cruzan alguna: no promete un diagrama sin
+  cruces. A los íconos con el nombre abajo (eventos y compuertas BPMN, objetos de datos...)
+  les reserva el ancho de su nombre, y las líneas que les llegan desde abajo entran por un
+  costado. Un elemento `dentro` o `sobre` de sí mismo, o un ciclo de contención, es un
+  error. Las relaciones pueden ir en cualquier orden: la que usa a otra como extremo (un
+  mensaje de comunicación sobre su conector) se dibuja después de ella.
 - Despliegue: los nodos y entornos de ejecución se anidan (servidor > contenedor), los
   artefactos van en el nodo donde se despliegan o se unen con `Deployment`, y los nodos
   se comunican con `Communication Path`, con el protocolo como nombre.
@@ -125,7 +164,9 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
   pertenece a un carril va `dentro` de él, también los nodos de objeto y almacenes.
 - `mdj_validar` revisa el metamodelo de StarUML en todos los diagramas: tipos que
   StarUML no conoce, elementos en campos que no existen, vistas que el diagrama no
-  admite y líneas sin extremos válidos.
+  admite y líneas sin extremos válidos. Las anotaciones (nota, enlace de nota, texto,
+  cuadro de texto, rectángulo, elipse, hipervínculo, imagen y línea libre) valen en
+  cualquier diagrama.
 
 ## Exportar y revisar
  

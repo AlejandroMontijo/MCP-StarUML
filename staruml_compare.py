@@ -25,10 +25,20 @@ _PRIMITIVOS = {
     'boolean': ('bool', 'boolean'),
     'Date': ('date', 'localdate', 'datetime', 'localdatetime', 'timestamp', 'fecha', 'instant', 'offsetdatetime',
              'zoneddatetime', 'datetimeoffset', 'dateonly'),
+    'Time': ('time', 'localtime', 'timeonly', 'timespan', 'offsettime'),
     'void': ('void', 'none', 'null', 'undefined', 'unit'),
     'Object': ('object', 'any', 'unknown', 'var', 'dynamic'),
 }
 _ALIAS = {a: canon for canon, alias in _PRIMITIVOS.items() for a in alias}
+# Para comparar, long cuenta como int, BigDecimal como double y LocalDateTime como Date (forma comun). Para importar y
+# generar se conserva la precision: estos tipos no se juntan con los demas.
+_RICOS = {
+    'long': ('long', 'int64', 'uint64', 'ulong', 'bigint'),
+    'BigInteger': ('biginteger',),
+    'decimal': ('decimal', 'bigdecimal', 'money'),
+    'DateTime': ('datetime', 'localdatetime', 'timestamp', 'instant', 'offsetdatetime', 'zoneddatetime', 'datetimeoffset'),
+}
+_ALIAS_RICO = dict(_ALIAS, **{a: canon for canon, alias in _RICOS.items() for a in alias})
 _LISTAS = {'list', 'arraylist', 'linkedlist', 'collection', 'iterable', 'ienumerable', 'ilist', 'icollection', 'array',
            'sequence', 'readonlyarray', 'vector', 'readonlycollection', 'observablecollection', 'ireadonlylist',
            'ireadonlycollection', 'mutablelist', 'mutablecollection', 'arraydeque'}
@@ -59,11 +69,14 @@ def _dividir(texto: str, sep: str = ',') -> List[str]:
     return [p.strip() for p in partes if p.strip()]
 
 
-def _normalizar_tipo(tipo) -> str:
-    """Forma comun de un tipo en UML y en cualquier lenguaje: String, int, double, boolean, Date, void, Object,
-    List<X>, Set<X>, Map<K,V> o el nombre de la clase tal cual (con sus mayusculas)."""
+def _normalizar_tipo(tipo, rico: bool = False) -> str:
+    """Forma comun de un tipo en UML y en cualquier lenguaje: String, int, double, boolean, Date, Time, void, Object,
+    List<X>, Set<X>, Map<K,V> o el nombre de la clase tal cual (con sus mayusculas). Con rico=True se conservan
+    long, BigInteger, decimal y DateTime (para importar y generar sin perder precision)."""
     if not isinstance(tipo, str) or not tipo.strip():
         return 'Object'
+    alias_de = _ALIAS_RICO if rico else _ALIAS
+    sub = (lambda x: _normalizar_tipo(x, rico)) if rico else _normalizar_tipo
     # las referencias adelantadas de Python van entre comillas: List["Pedido"]
     t = re.sub(r'^(java\.lang\.|java\.util\.|typing\.|System\.Collections\.Generic\.|System\.)', '', tipo.strip().replace('"', '').replace("'", ''))
     t = re.sub(r'^(final|const|readonly)\s+', '', t)
@@ -72,28 +85,40 @@ def _normalizar_tipo(tipo) -> str:
     alternativas = [p for p in _dividir(t, '|') if p not in ('None', 'null', 'undefined')]
     if len(alternativas) == 1:
         t = alternativas[0]
+    # sintaxis de Go (los tipos de un programa en Go quedan asi en el modelo): *T, []T, [N]T, map[K]V, time.Time
+    if t.startswith('*'):
+        return sub(t.lstrip('*'))
+    m = re.match(r'\[[\w.]*\]\s*(\S.*)$', t, re.S)
+    if m:
+        return f'List<{sub(m.group(1))}>'
+    if t.startswith('map['):
+        k = _cerrar_par(t, 3, '[', ']')
+        if k < len(t) - 1:
+            return f'Map<{sub(t[4:k])},{sub(t[k + 1:])}>'
+    if t == 'time.Time':
+        return alias_de['datetime']
     if t.endswith('[]'):
-        return f'List<{_normalizar_tipo(t[:-2])}>'
+        return f'List<{sub(t[:-2])}>'
     m = re.fullmatch(r'([\w.$]+)\s*[<\[]\s*(.+?)\s*[>\]]', t, re.S)
     if m:
         base, args = m.group(1).split('.')[-1], _dividir(m.group(2), ',')
         b = base.lower()
         if b in _OPCIONALES and len(args) == 1:
-            return _normalizar_tipo(args[0])
+            return sub(args[0])
         if b in _LISTAS and len(args) == 1:
-            return f'List<{_normalizar_tipo(args[0])}>'
+            return f'List<{sub(args[0])}>'
         if b in _SETS and len(args) == 1:
-            return f'Set<{_normalizar_tipo(args[0])}>'
+            return f'Set<{sub(args[0])}>'
         if b in _MAPAS and len(args) == 2:
-            return f'Map<{_normalizar_tipo(args[0])},{_normalizar_tipo(args[1])}>'
-        return f'{base}<{",".join(_normalizar_tipo(a) for a in args)}>'
+            return f'Map<{sub(args[0])},{sub(args[1])}>'
+        return f'{base}<{",".join(sub(a) for a in args)}>'
     if t.endswith('[]'):
-        return f'List<{_normalizar_tipo(t[:-2])}>'
+        return f'List<{sub(t[:-2])}>'
     if t.endswith('...'):
-        return f'List<{_normalizar_tipo(t[:-3])}>'
+        return f'List<{sub(t[:-3])}>'
     b = t.split('.')[-1].lower()
-    if b in _ALIAS:
-        return _ALIAS[b]
+    if b in alias_de:
+        return alias_de[b]
     if b in _LISTAS:
         return 'List<Object>'
     if b in _SETS:
@@ -111,11 +136,36 @@ def _normalizar_nombre(nombre: str) -> str:
     return re.sub(r'[\s_\-]+', '', _sin_acentos(limpio)).lower()
 
 
+def _clave_exacta(nombre: str) -> str:
+    """Clave sin quitar prefijos: 'BC_Cliente' -> 'bccliente', 'Orden de Entrega' -> 'ordendeentrega'."""
+    return re.sub(r'[\s_\-]+', '', _sin_acentos(nombre or '')).lower()
+
+
+def _emparejar(nombres_uml, nombres_codigo) -> Dict[str, str]:
+    """{nombre del modelo: nombre en el codigo}. Primero la coincidencia exacta (sin acentos, espacios ni mayusculas);
+    el nombre sin prefijo de estereotipo (BC_, ctrl_...) solo se usa cuando no hay otra, asi BC_Cliente no se confunde
+    con Cliente. Cada clase del codigo se empareja una sola vez."""
+    res, usados = {}, set()
+    for clave in (_clave_exacta, _normalizar_nombre):
+        libres = {}
+        for k in nombres_codigo:
+            if k not in usados:
+                libres.setdefault(clave(k), []).append(k)
+        for n in nombres_uml:
+            if n in res:
+                continue
+            cands = [k for k in libres.get(clave(n), []) if k not in usados]
+            if cands:
+                res[n] = cands[0]
+                usados.add(cands[0])
+    return res
+
+
 def _clave_tipo(tipo: str, numeros_iguales: bool = False) -> str:
     """Tipo normalizado con los nombres de clase tambien normalizados (acentos, mayusculas)."""
     t = _normalizar_tipo(tipo)
-    if numeros_iguales:  # TypeScript/JavaScript solo tienen number
-        t = re.sub(r'\bint\b', 'double', t)
+    if numeros_iguales:  # TypeScript/JavaScript solo tienen number y no tienen tipo de hora (se escribe como string)
+        t = re.sub(r'\bTime\b', 'String', re.sub(r'\bint\b', 'double', t))
     return re.sub(r'[^\W\d][\w$]*', lambda m: m.group(0) if m.group(0) in _PRIMITIVOS or m.group(0) in ('List', 'Set', 'Map')
                   else _normalizar_nombre(m.group(0)), t)
 
@@ -167,8 +217,9 @@ def extraer_elementos_diagrama(doc, nombre_diagrama: str) -> Dict[str, Any]:
 
     if tipo_dg == 'UMLClassDiagram':
         clases, asociaciones, generalizaciones = {}, [], []
-        ids_en_diagrama = {v['model']['$ref'] for v in dg.get('ownedViews', [])
-                           if isinstance(v.get('model'), dict) and '$ref' in v['model']}
+        # en el orden de las vistas (no de un set): la respuesta sale igual cada vez
+        ids_en_diagrama = list(dict.fromkeys(v['model']['$ref'] for v in dg.get('ownedViews', [])
+                                             if isinstance(v.get('model'), dict) and '$ref' in v['model']))
         for cid in ids_en_diagrama:
             el = doc.ids.get(cid)
             if not el or el.get('_type') not in ('UMLClass', 'UMLInterface', 'UMLActor', 'UMLEnumeration'):
@@ -178,16 +229,19 @@ def extraer_elementos_diagrama(doc, nombre_diagrama: str) -> Dict[str, Any]:
                 t = _tipo_uml(doc, a.get('type'))
                 if _es_coleccion_mult(a.get('multiplicity', '')) and t:
                     t = f'List<{t}>'
-                attrs.append({'nombre': a.get('name', ''), 'tipo': _normalizar_tipo(t), 'visibilidad': a.get('visibility', 'public')})
+                # 'tipo' es la forma comun (para comparar); 'tipo_gen' conserva long, BigDecimal, LocalDateTime... (para generar)
+                attrs.append({'nombre': a.get('name', ''), 'tipo': _normalizar_tipo(t), 'tipo_gen': _normalizar_tipo(t, True),
+                              'visibilidad': a.get('visibility', 'public')})
             metodos = []
             for op in el.get('operations', []):
-                params, ret = [], 'void'
+                params, ret, ret_gen = [], 'void', 'void'
                 for p in op.get('parameters', []):
+                    t = _tipo_uml(doc, p.get('type'))
                     if p.get('direction') == 'return':
-                        ret = _normalizar_tipo(_tipo_uml(doc, p.get('type')))
+                        ret, ret_gen = _normalizar_tipo(t), _normalizar_tipo(t, True)
                     else:
-                        params.append({'nombre': p.get('name', ''), 'tipo': _normalizar_tipo(_tipo_uml(doc, p.get('type')))})
-                metodos.append({'nombre': op.get('name', ''), 'retorno': ret, 'parametros': params,
+                        params.append({'nombre': p.get('name', ''), 'tipo': _normalizar_tipo(t), 'tipo_gen': _normalizar_tipo(t, True)})
+                metodos.append({'nombre': op.get('name', ''), 'retorno': ret, 'retorno_gen': ret_gen, 'parametros': params,
                                 'visibilidad': op.get('visibility', 'public')})
             clases[el.get('name', '')] = {
                 'id': el['_id'], 'nombre': el.get('name', ''), 'tipo': el['_type'], 'estereotipo': doc.kind(el),
@@ -430,12 +484,13 @@ def _params_ts(texto: str):
         mods, p = _modificadores(p, _MODIF_TS)
         if '=' in p:
             p = _dividir(p, '=')[0]
-        m = re.match(r'(\.\.\.)?([\w$]+)\s*\??\s*(?::\s*(.+))?$', p.strip())
+        m = re.match(r'(\.\.\.)?([\w$]+)\s*(\?)?\s*(?::\s*(.+))?$', p.strip())
         if m:
-            tipo = (m.group(3) or 'any') + ('[]' if m.group(1) and not (m.group(3) or '').endswith(']') else '')
-            res.append({'nombre': m.group(2), 'tipo': _normalizar_tipo(tipo)})
+            tipo = (m.group(4) or 'any') + ('[]' if m.group(1) and not (m.group(4) or '').endswith(']') else '')
+            res.append({'nombre': m.group(2), 'tipo': _normalizar_tipo(tipo), 'tipo_original': tipo.strip()})
             if mods:  # propiedad declarada en el constructor: constructor(private repo: Repo)
-                props.append({'nombre': m.group(2), 'tipo': _normalizar_tipo(m.group(3) or 'any'),
+                props.append({'nombre': m.group(2), 'tipo': _normalizar_tipo(m.group(4) or 'any'),
+                              'tipo_original': (m.group(4) or '').strip(), 'opcional': bool(m.group(3)),
                               'visibilidad': _visibilidad(mods, 'public')})
         elif p.strip():
             res.append({'nombre': 'args', 'tipo': _normalizar_tipo(p.split(':', 1)[1] if ':' in p else 'any')})
@@ -459,7 +514,16 @@ def _tipo_de_valor(v: str) -> str:
 
 
 def _cabecera(resto: str, lang: str, tipo_decl: str):
-    """Genericos, componentes de record, superclases e interfaces a partir de lo que sigue al nombre."""
+    """Genericos, componentes de record, superclases, interfaces y {nombre simple: nombre calificado} de las bases
+    escritas con su paquete, a partir de lo que sigue al nombre."""
+    calificadas = {}
+
+    def _base(b):
+        simple = _base_simple(b)
+        t = re.sub(r'<.*>', '', b).strip()
+        if '.' in t:
+            calificadas[simple] = t
+        return simple
     r = resto.strip()
     if r.startswith('<'):
         nivel = 0
@@ -480,19 +544,20 @@ def _cabecera(resto: str, lang: str, tipo_decl: str):
     if lang == 'csharp':
         m = re.match(r':\s*(.*?)(?:\bwhere\b.*)?$', r, re.S)
         if m:
-            bases = [_base_simple(b) for b in _dividir(m.group(1), ',')]
+            bases = [_base(b) for b in _dividir(m.group(1), ',')]
             for i, b in enumerate(bases):
                 (imp if (i > 0 or re.match(r'I[A-Z]', b) or tipo_decl == 'interface') else sup).append(b)
     else:
+        r = re.split(r'\bpermits\b', r)[0]  # sealed: las subclases permitidas no son bases
         m = re.search(r'\bextends\s+(.*?)(?=\bimplements\b|$)', r, re.S)
         if m:
-            sup = [_base_simple(b) for b in _dividir(m.group(1), ',')]
+            sup = [_base(b) for b in _dividir(m.group(1), ',')]
         m = re.search(r'\bimplements\s+(.*)$', r, re.S)
         if m:
-            imp = [_base_simple(b) for b in _dividir(m.group(1), ',')]
+            imp = [_base(b) for b in _dividir(m.group(1), ',')]
         if tipo_decl == 'interface':
             imp, sup = sup + imp, []
-    return componentes, [s for s in sup if s], [i for i in imp if i]
+    return componentes, [s for s in sup if s], [i for i in imp if i], calificadas
 
 
 def _llamadas_c(cuerpo: str):
@@ -533,8 +598,11 @@ def _miembros_jc(cuerpo: str, nombre: str, lang: str, tipo_decl: str):
                     continue  # llamada suelta o algo que no es declaracion
                 continue  # constructor: no es un metodo del modelo
             abstracto = 'abstract' in mods or (tipo_decl == 'interface' and term == ';' and not {'default', 'static'} & set(mods))
+            parametros = _params_jc(m.group(3))
+            if 'partial' in mods and any((x['nombre'], len(x['parametros'])) == (nom, len(parametros)) for x in metodos):
+                continue  # metodo partial de C#: la declaracion y su implementacion son el mismo metodo
             metodos.append({'nombre': nom, 'retorno': _normalizar_tipo(ret), 'retorno_original': ret,
-                            'parametros': _params_jc(m.group(3)),
+                            'parametros': parametros,
                             'visibilidad': _visibilidad(mods, 'public' if tipo_decl == 'interface' else 'package'),
                             'estatico': 'static' in mods, 'abstracto': abstracto})
             continue
@@ -564,20 +632,21 @@ def _miembros_ts(cuerpo: str, tipo_decl: str):
         texto = ' '.join(u for u, _ in decls)
         return [], [], [re.match(r'[\w$]+', x).group(0) for x in _dividir(texto, ',') if re.match(r'[\w$]+', x)]
 
-    def agregar_attr(nombre, tipo, vis):
+    def agregar_attr(nombre, tipo, vis, opcional=False, original=None):
         if nombre not in vistos:
             vistos.add(nombre)
-            atributos.append({'nombre': nombre, 'tipo': _normalizar_tipo(tipo), 'tipo_original': tipo, 'visibilidad': vis})
+            atributos.append({'nombre': nombre, 'tipo': _normalizar_tipo(tipo), 'visibilidad': vis,
+                              'tipo_original': tipo if original is None else original, 'opcional': opcional})
     for u, term in decls:
         u = _quitar_anotaciones(u)
         mods, u = _modificadores(u, _MODIF_TS)
-        vis = _visibilidad(mods, 'public')
+        vis = 'private' if u.startswith('#') else _visibilidad(mods, 'public')  # #campo es privado en JavaScript
         if not u or u.startswith('[') or _CABECERA.match(u):
             continue
         m = re.match(r'constructor\s*\((.*)\)$', u, re.S)
         if m:
             for p in _params_ts(m.group(1))[1]:
-                agregar_attr(p['nombre'], p['tipo'], p['visibilidad'])
+                agregar_attr(p['nombre'], p['tipo'], p['visibilidad'], p['opcional'], p['tipo_original'])
             continue
         m = re.match(r'([#\w$]+)\s*[?!]?\s*(?::[^=]+)?=\s*(?:async\s+)?(?:\(([^()]*(?:\([^()]*\))*[^()]*)\)|([\w$]+))\s*(?::\s*[^=]+)?=>', u)
         if m:  # funcion flecha asignada a una propiedad: se toma como metodo
@@ -591,20 +660,126 @@ def _miembros_ts(cuerpo: str, tipo_decl: str):
         m = re.match(r'([#\w$]+)\s*\??\s*(?:<[^()]*>)?\s*\((.*)\)\s*(?::\s*(.+))?$', u, re.S)
         if m and m.group(1) not in _NO_METODOS:
             metodos.append({'nombre': m.group(1).lstrip('#'), 'retorno': _normalizar_tipo(m.group(3) or 'void'),
-                            'parametros': _params_ts(m.group(2))[0], 'visibilidad': vis})
+                            'retorno_original': (m.group(3) or '').strip(), 'parametros': _params_ts(m.group(2))[0],
+                            'visibilidad': vis})
             continue
-        m = re.match(r'([#\w$]+)\s*[?!]?\s*(?::\s*([^=]+?))?\s*(?:=\s*(.*))?$', u, re.S)
-        if m and m.group(1) not in _NO_METODOS:
-            agregar_attr(m.group(1).lstrip('#'), m.group(2) or _tipo_de_valor(m.group(3)), vis)
+        m = re.match(r'([#\w$]+)\s*([?!])?\s*(?::\s*([^=]+?))?\s*(?:=\s*(.*))?$', u, re.S)
+        if m and m.group(1) not in _NO_METODOS:  # nombre?: Tipo es opcional (0..1)
+            agregar_attr(m.group(1).lstrip('#'), m.group(3) or _tipo_de_valor(m.group(4)), vis, m.group(2) == '?')
     return atributos, metodos, literales
 
 
+def _espacios(limpio: str, lang: str):
+    """[(inicio, fin, nombre)] de los package/namespace del archivo. Un namespace con llaves cubre su bloque (puede haber
+    varios en un archivo, y anidados); 'package x;' y el namespace de archivo de C# ('namespace X;') cubren el resto."""
+    if lang == 'java':
+        m = re.search(r'^\s*package\s+([\w.]+)\s*;', limpio, re.M)
+        return [(0, len(limpio), m.group(1))] if m else []
+    patron = r'\bnamespace\s+([\w.]+)\s*([{;])' if lang == 'csharp' else r'(?<![\w.$])(?:namespace|module)\s+([\w.]+)\s*(\{)'
+    res = []
+    for m in re.finditer(patron, limpio):
+        res.append((m.start(), len(limpio) if m.group(2) == ';' else _cierre(limpio, m.end() - 1), m.group(1)))
+    return res
+
+
+def _espacio_en(espacios, pos: int) -> str:
+    return '.'.join(n for i, f, n in sorted(espacios) if i <= pos <= f)
+
+
+def _anidadas(entradas):
+    """Clave de cada clase dentro de su archivo: la anidada lleva delante sus clases externas (Arbol.Nodo), asi dos
+    clases anidadas con el mismo nombre en clases distintas no se pisan. entradas: [(inicio, ini_cuerpo, fin_cuerpo,
+    nombre)]. Devuelve [(clave, externa)] en el mismo orden."""
+    res = []
+    for inicio, _, _, nombre in entradas:
+        externas = sorted((e for e in entradas if e[1] is not None and e[1] < inicio < e[2]), key=lambda e: e[1])
+        externa = '.'.join(e[3] for e in externas)
+        res.append(((externa + '.' if externa else '') + nombre, externa))
+    return res
+
+
+def _en_codigo(limpio: str, pos: int, palabra: str) -> bool:
+    """La palabra que empieza en pos es codigo (no esta dentro de un comentario ni de un texto)."""
+    return limpio[pos:pos + len(palabra)] == palabra
+
+
+def _imports_c(code: str, limpio: str, lang: str):
+    """Imports del archivo: {'tipo': 'clase', 'ruta', 'nombre', 'alias'}, {'tipo': 'paquete', 'ruta'} (comodin o
+    using de C#) o {'tipo': 'modulo', 'ruta', 'alias'} (import * as m de TS, alias de namespace de C#)."""
+    res = []
+    if lang == 'java':
+        for m in re.finditer(r'^\s*import\s+(static\s+)?([\w.]+?)(\.\*)?\s*;', limpio, re.M):
+            if not m.group(1):
+                ruta = m.group(2)
+                res.append({'tipo': 'paquete', 'ruta': ruta} if m.group(3) else
+                           {'tipo': 'clase', 'ruta': ruta, 'nombre': ruta.split('.')[-1], 'alias': ruta.split('.')[-1]})
+    elif lang == 'csharp':
+        for m in re.finditer(r'^\s*(?:global\s+)?using\s+(static\s+)?(?:(\w+)\s*=\s*)?([\w.]+)\s*;', limpio, re.M):
+            if m.group(1):
+                continue
+            if m.group(2):  # using Alias = Espacio.Clase; (o un espacio de nombres)
+                res.append({'tipo': 'clase', 'ruta': m.group(3), 'nombre': m.group(3).split('.')[-1], 'alias': m.group(2)})
+                res.append({'tipo': 'modulo', 'ruta': m.group(3), 'alias': m.group(2)})
+            else:
+                res.append({'tipo': 'paquete', 'ruta': m.group(3)})
+    else:  # TypeScript/JavaScript: la ruta va en un texto, asi que se lee del codigo original
+        for m in re.finditer(r'\bimport\s+(?:type\s+)?(?:([\w$]+)\s*,?\s*)?(?:\{([^}]*)\}|\*\s*as\s+([\w$]+))?\s*from\s*'
+                             r'[\'"]([^\'"]+)[\'"]', code):
+            if not _en_codigo(limpio, m.start(), 'import'):
+                continue
+            desde = m.group(4)
+            if m.group(1):
+                res.append({'tipo': 'clase', 'ruta': desde, 'nombre': m.group(1), 'alias': m.group(1)})
+            for parte in (m.group(2) or '').split(','):
+                mm = re.match(r'\s*(?:type\s+)?([\w$]+)(?:\s+as\s+([\w$]+))?\s*$', parte)
+                if mm:
+                    res.append({'tipo': 'clase', 'ruta': desde, 'nombre': mm.group(1), 'alias': mm.group(2) or mm.group(1)})
+            if m.group(3):
+                res.append({'tipo': 'modulo', 'ruta': desde, 'alias': m.group(3)})
+        for m in re.finditer(r'\b(?:const|let|var)\s+(?:\{([^}]*)\}|([\w$]+))\s*=\s*require\(\s*[\'"]([^\'"]+)[\'"]\s*\)', code):
+            if not _en_codigo(limpio, m.start(), m.group(0).split()[0]):
+                continue
+            for parte in (m.group(1) or '').split(','):
+                mm = re.match(r'\s*([\w$]+)(?:\s*:\s*([\w$]+))?\s*$', parte)
+                if mm:
+                    res.append({'tipo': 'clase', 'ruta': m.group(3), 'nombre': mm.group(1), 'alias': mm.group(2) or mm.group(1)})
+            if m.group(2):
+                res.append({'tipo': 'clase', 'ruta': m.group(3), 'nombre': m.group(2), 'alias': m.group(2)})
+                res.append({'tipo': 'modulo', 'ruta': m.group(3), 'alias': m.group(2)})
+    return res
+
+
+def _campos_this(cuerpo: str):
+    """Campos que el constructor crea con this.x = ... (la forma normal de declararlos en JavaScript), con el tipo del
+    parametro que se les asigna o el del valor."""
+    res = []
+    for mc in re.finditer(r'\bconstructor\s*\(', cuerpo):
+        if cuerpo[:mc.start()].count('{') != cuerpo[:mc.start()].count('}'):
+            continue  # no es el constructor de esta clase
+        p = mc.end() - 1
+        q = _cerrar_par(cuerpo, p)
+        ll = q + 1 + len(cuerpo[q + 1:]) - len(cuerpo[q + 1:].lstrip())
+        if cuerpo[ll:ll + 1] != '{':
+            continue  # firma sin cuerpo (sobrecarga de TypeScript): el que crea los campos es el que tiene cuerpo
+        tipos = {x['nombre']: x.get('tipo_original') or x['tipo'] for x in _params_ts(cuerpo[p + 1:q])[0]}
+        for ma in re.finditer(r'\bthis\s*\.\s*(#?)([A-Za-z_$][\w$]*)\s*=(?![=>])\s*([^;\n]*)', cuerpo[ll:_cierre(cuerpo, ll) + 1]):
+            valor = ma.group(3).strip()
+            # el tipo del parametro que se asigna; si no, el del literal (true, 0, 'x', [], new Date()); otra cosa es Object
+            tipo = tipos.get(valor) or _tipo_de_valor(valor)
+            if ma.group(2) not in [r['nombre'] for r in res]:
+                res.append({'nombre': ma.group(2), 'tipo': _normalizar_tipo(tipo), 'tipo_original': tipo,
+                            'visibilidad': 'private' if ma.group(1) else 'public'})
+        break
+    return res
+
+
 def _parse_c(code: str, ruta: str, lang: str) -> Dict[str, Any]:
-    """Java, C# y TypeScript/JavaScript."""
+    """Java, C# y TypeScript/JavaScript. Las clases se devuelven por su clave en el archivo (Arbol.Nodo para una
+    anidada), con 'nombre' (simple), 'externa' (la clase que la contiene) y el package/namespace que la encierra."""
     limpio = _limpiar_codigo(code, lang)
-    m_pkg = re.search(r'\b(?:package|namespace)\s+([\w.]+)', limpio)
-    paquete = m_pkg.group(1) if m_pkg else ''
-    clases = {}
+    espacios = _espacios(limpio, lang)
+    imports = _imports_c(code, limpio, lang)
+    entradas = []
     for m in _CABECERA.finditer(limpio):
         tipo_decl, nombre = m.group(1), m.group(2)
         if tipo_decl == 'record' and lang == 'typescript':
@@ -622,27 +797,68 @@ def _parse_c(code: str, ruta: str, lang: str) -> Dict[str, Any]:
             k += 1
         if k >= len(limpio):
             continue
-        componentes, superclases, interfaces = _cabecera(limpio[m.end():k], lang, tipo_decl)
-        if limpio[k] == '{':
-            fin = _cierre(limpio, k)
-            cuerpo = limpio[k + 1:fin]
-        else:
-            cuerpo = ''
+        entradas.append((m, k, _cierre(limpio, k) if limpio[k] == '{' else None))
+    claves = _anidadas([(m.start(), k if fin is not None else None, fin, m.group(2)) for m, k, fin in entradas])
+    clases = {}
+    for (m, k, fin), (clave, externa) in zip(entradas, claves):
+        tipo_decl, nombre = m.group(1), m.group(2)
+        componentes, superclases, interfaces, calificadas = _cabecera(limpio[m.end():k], lang, tipo_decl)
+        cuerpo = limpio[k + 1:fin] if fin is not None else ''
         previo = limpio[max(0, limpio.rfind('\n', 0, max(0, m.start() - 200))):m.start()]
         anotaciones = re.findall(r'@([\w$]+)', previo.split(';')[-1].split('}')[-1])
-        abstracta = tipo_decl == 'class' and bool(re.search(r'\babstract\b', re.split(r'[;{}]', previo)[-1]))
+        modificadores = re.split(r'[;{}]', previo)[-1]
+        abstracta = tipo_decl == 'class' and bool(re.search(r'\babstract\b', modificadores))
         if lang == 'typescript':
             atributos, metodos, literales = _miembros_ts(cuerpo, tipo_decl)
+            if tipo_decl == 'class':  # JavaScript: los campos se crean en el constructor con this.x = ...
+                vistos = {a['nombre'] for a in atributos}
+                atributos += [a for a in _campos_this(cuerpo) if a['nombre'] not in vistos]
         else:
             atributos, metodos, literales = _miembros_jc(cuerpo, nombre, lang, tipo_decl)
         if componentes:  # record: sus componentes son atributos
-            atributos = [{'nombre': p['nombre'], 'tipo': p['tipo'], 'tipo_original': p['tipo'], 'visibilidad': 'public'}
+            atributos = [{'nombre': p['nombre'], 'tipo': p['tipo'], 'tipo_original': p['tipo_original'], 'visibilidad': 'public'}
                          for p in _params_jc(componentes)] + atributos
-        clases[nombre] = {'nombre': nombre, 'paquete': paquete, 'tipo_decl': tipo_decl, 'archivo': ruta, 'lenguaje': lang,
-                          'abstracta': abstracta, 'anotaciones': anotaciones, 'superclases': superclases, 'interfaces': interfaces,
-                          'atributos': atributos, 'metodos': metodos, 'literales': literales,
-                          'llamadas': _llamadas_c(cuerpo)}
+        info = {'nombre': nombre, 'paquete': _espacio_en(espacios, m.start()), 'externa': externa, 'tipo_decl': tipo_decl,
+                'archivo': ruta, 'lenguaje': lang, 'abstracta': abstracta,
+                'parcial': lang == 'csharp' and bool(re.search(r'\bpartial\b', modificadores)),
+                'anotaciones': anotaciones, 'superclases': superclases, 'interfaces': interfaces,
+                'bases_calificadas': calificadas, 'atributos': atributos, 'metodos': metodos, 'literales': literales,
+                'llamadas': _llamadas_c(cuerpo), 'imports': list(imports)}
+        # la clave lleva el namespace: en C# un archivo puede tener varios con clases que se llaman igual
+        _agregar_clase(clases, f'{info["paquete"]}.{clave}' if info['paquete'] else clave, info)
     return clases
+
+
+def _juntar_partes(previa: Dict[str, Any], info: Dict[str, Any]) -> None:
+    """Junta en previa otra parte de la misma clase (partial class de C# en varios archivos o bloques)."""
+    nombres = {a['nombre'] for a in previa['atributos']}
+    previa['atributos'] += [a for a in info['atributos'] if a['nombre'] not in nombres]
+    firmas = {(m['nombre'], len(m.get('parametros', []))) for m in previa['metodos']}
+    previa['metodos'] += [m for m in info['metodos'] if (m['nombre'], len(m.get('parametros', []))) not in firmas]
+    previa['llamadas'] += info.get('llamadas', [])
+    for k in ('superclases', 'interfaces', 'anotaciones', 'imports'):
+        previa[k] = previa.get(k, []) + [x for x in info.get(k, []) if x not in previa.get(k, [])]
+    previa['abstracta'] = previa.get('abstracta') or info.get('abstracta')
+    archivos = previa.setdefault('archivos', [previa['archivo']])
+    if info['archivo'] not in archivos:
+        archivos.append(info['archivo'])
+
+
+def _misma_parcial(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    return bool(a.get('parcial') and b.get('parcial') and a.get('paquete') == b.get('paquete')
+                and a.get('externa') == b.get('externa'))
+
+
+def _agregar_clase(clases: Dict[str, Any], clave: str, info: Dict[str, Any]) -> None:
+    """Agrega la clase con su clave. Las partes de una partial class se juntan; si la clave se repite por otra
+    razon se conserva la primera y se anota donde mas aparece (nunca se pierde en silencio)."""
+    previa = clases.get(clave)
+    if previa is None:
+        clases[clave] = info
+    elif _misma_parcial(previa, info):
+        _juntar_partes(previa, info)
+    else:
+        previa.setdefault('repetida_en', []).append(info['archivo'])
 
 
 # --- Kotlin ---
@@ -683,8 +899,8 @@ def _tipo_valor_kt(v: str) -> str:
 
 
 def _params_kt(texto: str):
-    """Parametros y propiedades del constructor primario (las que llevan val/var)."""
-    params, props = [], []
+    """Parametros, propiedades del constructor primario (las que llevan val/var) y {parametro: tipo como esta escrito}."""
+    params, props, originales = [], [], {}
     for p in _dividir(texto, ','):
         p = _quitar_anotaciones(p)
         mods, p = _modificadores(p, _MODIF_KT)
@@ -698,10 +914,11 @@ def _params_kt(texto: str):
         if 'vararg' in mods:
             tipo = f'List<{tipo}>'
         params.append({'nombre': m.group(1), 'tipo': tipo})
+        originales[m.group(1)] = f'List<{m.group(2).strip()}>' if 'vararg' in mods else m.group(2).strip()
         if es_prop:
             props.append({'nombre': m.group(1), 'tipo': tipo, 'tipo_original': m.group(2).strip(),
                           'visibilidad': _visibilidad(mods, 'public')})
-    return params, props
+    return params, props, originales
 
 
 def _fin_cabecera_kt(texto: str, i: int) -> int:
@@ -727,7 +944,12 @@ def _parse_kotlin(code: str, ruta: str) -> Dict[str, Any]:
     limpio = _limpiar_codigo(code, 'kotlin')
     m_pkg = re.search(r'^\s*package\s+([\w.]+)', limpio, re.M)
     paquete = m_pkg.group(1) if m_pkg else ''
-    clases = {}
+    imports = []
+    for mi in re.finditer(r'^\s*import\s+([\w.]+?)(\.\*)?(?:\s+as\s+(\w+))?\s*$', limpio, re.M):
+        ruta_i = mi.group(1)
+        imports.append({'tipo': 'paquete', 'ruta': ruta_i} if mi.group(2) else
+                       {'tipo': 'clase', 'ruta': ruta_i, 'nombre': ruta_i.split('.')[-1], 'alias': mi.group(3) or ruta_i.split('.')[-1]})
+    entradas = []
     for m in _CABECERA_KT.finditer(limpio):
         palabra, nombre = m.group(1), m.group(2)
         linea = limpio[limpio.rfind('\n', 0, m.start()) + 1:m.start()]
@@ -743,7 +965,7 @@ def _parse_kotlin(code: str, ruta: str) -> Dict[str, Any]:
         props = []
         if cab.startswith('('):
             k = _cerrar_par(cab, 0)
-            _, props = _params_kt(cab[1:k])
+            _, props, _ = _params_kt(cab[1:k])
             cab = cab[k + 1:].strip()
         superclases, interfaces = [], []
         if cab.startswith(':'):
@@ -753,7 +975,9 @@ def _parse_kotlin(code: str, ruta: str) -> Dict[str, Any]:
                 if not b:
                     continue
                 (superclases if ('(' in b and tipo_decl != 'interface') else interfaces).append(_base_simple(b.split('(')[0]))
-        cuerpo = limpio[fin + 1:_cierre(limpio, fin)] if fin < len(limpio) and limpio[fin] == '{' else ''
+        con_cuerpo = fin < len(limpio) and limpio[fin] == '{'
+        fin_cuerpo = _cierre(limpio, fin) if con_cuerpo else None
+        cuerpo = limpio[fin + 1:fin_cuerpo] if con_cuerpo else ''
         atributos, metodos, literales = list(props), [], []
         decls = _declaraciones(_nivel_uno(cuerpo), por_linea=True)
         if tipo_decl == 'enum':
@@ -769,11 +993,12 @@ def _parse_kotlin(code: str, ruta: str) -> Dict[str, Any]:
             mf = re.match(r'fun\s+(?:<[^()]*?>\s*)?(?:[\w.<>?, ]+\.)?([^\W\d]\w*)\s*\(', u)
             if mf:
                 k = _cerrar_par(u, mf.end() - 1)
-                parametros, _ = _params_kt(u[mf.end():k])
+                parametros, _, originales = _params_kt(u[mf.end():k])
                 resto = u[k + 1:].strip()
                 mr = re.match(r':\s*([^=]+?)\s*(?:=.*)?$', resto)
                 retorno = _normalizar_tipo(mr.group(1)) if mr else ('Object' if resto.startswith('=') else 'void')
-                metodos.append({'nombre': mf.group(1), 'retorno': retorno, 'parametros': parametros,
+                metodos.append({'nombre': mf.group(1), 'retorno': retorno, 'retorno_original': mr.group(1) if mr else '',
+                                'parametros': parametros, 'tipos_originales': originales,
                                 'visibilidad': 'public' if tipo_decl == 'interface' else vis})
                 continue
             mv = re.match(r'(val|var)\s+(?:[\w.<>?]+\.)?([^\W\d]\w*)\s*(?::\s*(.+?))?\s*(?:(=|by\b)\s*(.*))?$', u)
@@ -788,10 +1013,16 @@ def _parse_kotlin(code: str, ruta: str) -> Dict[str, Any]:
         while previas and re.fullmatch(r'\s*(@[\w.:]+(\([^()]*\))?\s*)+', previas[-1]):
             anotaciones = re.findall(r'@(?:\w+:)?([\w.]+)', previas.pop()) + anotaciones
         anotaciones += re.findall(r'@(?:\w+:)?([\w.]+)', linea)
-        clases[nombre] = {'nombre': nombre, 'paquete': paquete, 'tipo_decl': tipo_decl, 'archivo': ruta, 'lenguaje': 'kotlin',
-                          'anotaciones': anotaciones, 'superclases': superclases, 'interfaces': interfaces,
-                          'atributos': atributos, 'metodos': metodos, 'literales': literales,
-                          'llamadas': [ll for ll in _llamadas_c(_SIN_DECL_KT.sub(' ', cuerpo)) if ll['metodo'] != 'constructor']}
+        info = {'nombre': nombre, 'paquete': paquete, 'tipo_decl': tipo_decl, 'archivo': ruta, 'lenguaje': 'kotlin',
+                'anotaciones': anotaciones, 'superclases': superclases, 'interfaces': interfaces,
+                'atributos': atributos, 'metodos': metodos, 'literales': literales,
+                'llamadas': [ll for ll in _llamadas_c(_SIN_DECL_KT.sub(' ', cuerpo)) if ll['metodo'] != 'constructor'],
+                'imports': list(imports)}
+        entradas.append((m.start(), fin if con_cuerpo else None, fin_cuerpo, nombre, info))
+    clases = {}
+    for (clave, externa), e in zip(_anidadas([x[:4] for x in entradas]), entradas):
+        e[4]['externa'] = externa
+        _agregar_clase(clases, clave, e[4])
     return clases
 
 
@@ -821,8 +1052,9 @@ def _tipo_go(t: str) -> str:
     return _normalizar_tipo(t)
 
 
-def _params_go(texto: str):
-    """a, b int, c string -> a:int, b:int, c:string (los nombres agrupados comparten el tipo)."""
+def _params_go(texto: str, originales=None):
+    """a, b int, c string -> a:int, b:int, c:string (los nombres agrupados comparten el tipo). En originales (si se da)
+    queda el tipo de cada parametro como esta escrito."""
     partes = [p.strip() for p in _dividir(texto, ',') if p.strip()]
     con_nombre = any(re.match(r'[^\W\d]\w*\s+\S', p) for p in partes)
     res, pendientes = [], []
@@ -831,6 +1063,8 @@ def _params_go(texto: str):
         if con_nombre and m:
             for n in pendientes + [m.group(1)]:
                 res.append({'nombre': n, 'tipo': _tipo_go(m.group(2))})
+                if originales is not None:
+                    originales[n] = m.group(2).strip()
             pendientes = []
         elif con_nombre:
             pendientes.append(p)
@@ -860,6 +1094,11 @@ def _parse_go(code: str, ruta: str) -> Dict[str, Any]:
     limpio = re.sub(r'`[^`]*`', lambda x: ' ' * len(x.group(0)), limpio)  # etiquetas de campos y textos crudos
     m_pkg = re.search(r'^\s*package\s+(\w+)', limpio, re.M)
     paquete = m_pkg.group(1) if m_pkg else ''
+    imports = []  # la ruta va en un texto: se lee del codigo original
+    for m in re.finditer(r'\bimport\s*(?:\(([^)]*)\)|((?:[\w.]+\s+)?"[^"]+"))', code):
+        if _en_codigo(limpio, m.start(), 'import'):
+            for mi in re.finditer(r'(?:([\w.]+)\s+)?"([^"]+)"', m.group(1) or m.group(2)):
+                imports.append({'tipo': 'modulo', 'ruta': mi.group(2), 'alias': mi.group(1) or mi.group(2).split('/')[-1]})
     nivel, prof = 0, []
     for c in limpio:
         prof.append(nivel)
@@ -928,7 +1167,7 @@ def _parse_go(code: str, ruta: str) -> Dict[str, Any]:
         clases[nombre] = {'nombre': nombre, 'paquete': paquete, 'tipo_decl': 'interface' if sub == 'interface' else 'class',
                           'archivo': ruta, 'lenguaje': 'go', 'anotaciones': [], 'superclases': superclases,
                           'interfaces': interfaces, 'atributos': atributos, 'metodos': metodos, 'literales': [],
-                          'llamadas': []}
+                          'llamadas': [], 'imports': list(imports)}
 
     # metodos con receptor: func (c *Cliente) Total(...) float64 { ... }
     for m in re.finditer(r'\bfunc\s*\(\s*(?:([^\W\d]\w*)\s+)?\*?\s*([^\W\d]\w*)(?:\[[^\]]*\])?\s*\)\s*([^\W\d]\w*)\s*(?:\[[^\]]*\])?\s*\(', limpio):
@@ -940,8 +1179,10 @@ def _parse_go(code: str, ruta: str) -> Dict[str, Any]:
             continue
         cuerpo = limpio[llave + 1:_cierre(limpio, llave)]
         c = clases[m.group(2)]
+        originales = {}
         c['metodos'].append({'nombre': m.group(3), 'retorno': _retorno_go(limpio[k + 1:llave]),
-                             'parametros': _params_go(limpio[m.end():k]), 'visibilidad': _vis_go(m.group(3))})
+                             'parametros': _params_go(limpio[m.end():k], originales), 'tipos_originales': originales,
+                             'visibilidad': _vis_go(m.group(3))})
         receptor = m.group(1)
         for ll in _llamadas_c(cuerpo):
             c['llamadas'].append({'objeto': 'this' if ll['objeto'] == receptor else ll['objeto'], 'metodo': ll['metodo']})
@@ -971,7 +1212,7 @@ def _parse_go(code: str, ruta: str) -> Dict[str, Any]:
     for nombre, lits in literales.items():
         clases.setdefault(nombre, {'nombre': nombre, 'paquete': paquete, 'tipo_decl': 'enum', 'archivo': ruta, 'lenguaje': 'go',
                                    'anotaciones': [], 'superclases': [], 'interfaces': [], 'atributos': [], 'metodos': [],
-                                   'literales': lits, 'llamadas': []})
+                                   'literales': lits, 'llamadas': [], 'imports': list(imports)})
     return clases
 
 
@@ -1008,6 +1249,10 @@ def _tipo_valor_ast(nodo) -> str:
     if isinstance(nodo, (ast.Set, ast.SetComp)):
         return 'set'
     if isinstance(nodo, ast.Call) and _nombre_ast(nodo.func) not in ('field', 'Field'):
+        # handler.ErrorHandler() conserva el modulo: con el se sabe de cual clase ErrorHandler se trata
+        texto = _texto_ast(nodo.func) if isinstance(nodo.func, ast.Attribute) else ''
+        if re.fullmatch(r'[\w.]+', texto) and texto.split('.')[-1][:1].isupper():
+            return texto
         return _nombre_ast(nodo.func) or 'Object'
     return 'Object'
 
@@ -1021,6 +1266,18 @@ def _parse_python(code: str, ruta: str) -> Dict[str, Any]:
         arbol = ast.parse(code)
     except (SyntaxError, ValueError):
         return {}
+    imports = []  # 'desde' guarda el modulo con los puntos de un import relativo (.modelos, ..comun)
+    for nodo in ast.walk(arbol):
+        if isinstance(nodo, ast.ImportFrom):
+            desde = '.' * (nodo.level or 0) + (nodo.module or '')
+            for n in nodo.names:
+                if n.name != '*':
+                    imports.append({'tipo': 'clase', 'ruta': desde, 'nombre': n.name, 'alias': n.asname or n.name})
+                else:
+                    imports.append({'tipo': 'paquete', 'ruta': desde})
+        elif isinstance(nodo, ast.Import):
+            for n in nodo.names:
+                imports.append({'tipo': 'modulo', 'ruta': n.name, 'alias': n.asname or n.name})
     clases = {}
     for nodo in arbol.body:
         if not isinstance(nodo, ast.ClassDef):
@@ -1053,7 +1310,9 @@ def _parse_python(code: str, ruta: str) -> Dict[str, Any]:
                 anot = {a.arg: _texto_ast(a.annotation) for a in args}
                 if not item.name.startswith('__'):
                     metodos.append({'nombre': item.name, 'retorno': _normalizar_tipo(_texto_ast(item.returns) or 'None'),
+                                    'retorno_original': _texto_ast(item.returns),
                                     'parametros': [{'nombre': a.arg, 'tipo': _normalizar_tipo(anot[a.arg])} for a in args],
+                                    'tipos_originales': {k: v for k, v in anot.items() if v},
                                     'visibilidad': 'private' if item.name.startswith('_') else 'public'})
                 for sub in ast.walk(item):
                     if isinstance(sub, ast.AnnAssign) and _es_self(sub.target):
@@ -1069,10 +1328,13 @@ def _parse_python(code: str, ruta: str) -> Dict[str, Any]:
                         objeto = v.id if isinstance(v, ast.Name) else (v.attr if _es_self(v) else '')
                         if objeto:
                             llamadas.append({'objeto': 'this' if objeto in ('self', 'cls') else objeto, 'metodo': sub.func.attr})
-        clases[nodo.name] = {'nombre': nodo.name, 'paquete': '', 'tipo_decl': 'enum' if es_enum else 'class', 'archivo': ruta,
-                             'lenguaje': 'python', 'anotaciones': [_nombre_ast(d) for d in nodo.decorator_list],
-                             'superclases': bases, 'interfaces': [], 'atributos': atributos, 'metodos': metodos,
-                             'literales': literales, 'llamadas': llamadas}
+        info = {'nombre': nodo.name, 'paquete': '', 'tipo_decl': 'enum' if es_enum else 'class', 'archivo': ruta,
+                'lenguaje': 'python', 'anotaciones': [_nombre_ast(d) for d in nodo.decorator_list],
+                'superclases': bases, 'interfaces': [], 'atributos': atributos, 'metodos': metodos,
+                'literales': literales, 'llamadas': llamadas, 'imports': list(imports),
+                'bases_calificadas': {t.split('.')[-1]: t for t in (_texto_ast(x.value if isinstance(x, ast.Subscript) else x)
+                                                                     for x in nodo.bases) if '.' in t}}
+        _agregar_clase(clases, nodo.name, info)
     return clases
 
 
@@ -1134,9 +1396,25 @@ def escanear_codigo(ruta: str, lenguaje: str = 'auto') -> Dict[str, Any]:
         raise FileNotFoundError(f"La ruta de codigo no existe: {ruta}")
     resultado = {}
     for a in archivos:
-        for nom, info in CodeParser.parse_archivo(a, lenguaje).items():
-            resultado.setdefault(nom, info)  # si se repite el nombre, gana el primero encontrado
+        for info in CodeParser.parse_archivo(a, lenguaje).values():
+            nom = info['nombre']
+            previa = resultado.get(nom)
+            if previa is None:
+                resultado[nom] = info
+            elif _misma_parcial(previa, info):  # partial class de C# repartida en varios archivos
+                _juntar_partes(previa, info)
+            elif previa.get('externa') and not info.get('externa'):
+                # una clase de primer nivel gana sobre una anidada que se llama igual
+                info['repetida_en'] = [previa['archivo']] + previa.get('repetida_en', []) + info.get('repetida_en', [])
+                resultado[nom] = info
+            else:  # se queda la primera y se anota donde mas aparece
+                previa['repetida_en'] = previa.get('repetida_en', []) + [info['archivo']] + info.get('repetida_en', [])
     return resultado
+
+
+def _repetidas(codigo: Dict[str, Any]) -> Dict[str, List[str]]:
+    """{clase: [archivo que se uso, archivos donde tambien aparece]} de las que se llaman igual en el codigo."""
+    return {n: [c.get('archivo')] + c['repetida_en'] for n, c in codigo.items() if c.get('repetida_en')}
 
 
 # ---------------------------------------------------------------------------
@@ -1155,11 +1433,27 @@ def comparar_diagrama_con_codigo(doc, nombre_diagrama: str, ruta_codigo: str, le
     return {'error': f'Tipo de diagrama no soportado para comparacion con codigo: {tipo_dg}', 'diagrama': nombre_diagrama}
 
 
+def _ancestros_codigo(codigo: Dict[str, Any], nombre: str) -> set:
+    """Claves (_clave_exacta) de todo lo que la clase del codigo hereda o implementa, tambien por medio de otras clases
+    del codigo: si C extiende B y B extiende A, C hereda de A."""
+    por_clave = {}
+    for k in codigo:
+        por_clave.setdefault(_clave_exacta(k), k)
+    vistos, pila = set(), [nombre]
+    while pila:
+        c = codigo.get(pila.pop()) or {}
+        for x in c.get('superclases', []) + c.get('interfaces', []):
+            kx = _clave_exacta(x)
+            if kx not in vistos:
+                vistos.add(kx)
+                if kx in por_clave:
+                    pila.append(por_clave[kx])
+    return vistos
+
+
 def _comparar_clases_con_codigo(uml: Dict[str, Any], codigo: Dict[str, Any]) -> Dict[str, Any]:
     clases_uml = uml.get('clases', {})
-    mapa_codigo = {}
-    for k, v in codigo.items():
-        mapa_codigo.setdefault(_normalizar_nombre(k), (k, v))
+    pares = _emparejar([n for n, c in clases_uml.items() if c.get('tipo') != 'UMLActor'], list(codigo))
     coincidentes, faltantes, detalles, actores = [], [], {}, []
     total = exitos = 0.0
 
@@ -1168,14 +1462,14 @@ def _comparar_clases_con_codigo(uml: Dict[str, Any], codigo: Dict[str, Any]) -> 
             actores.append(nom_uml)  # los actores son externos al sistema: no se exigen en el codigo
             continue
         total += 10
-        par = mapa_codigo.get(_normalizar_nombre(nom_uml))
-        if not par:
+        if nom_uml not in pares:
             faltantes.append({'nombre': nom_uml, 'estereotipo': c_uml.get('estereotipo'), 'tipo': c_uml.get('tipo'),
                               'atributos_pendientes': [a['nombre'] for a in c_uml.get('atributos', [])],
                               'documentacion': c_uml.get('documentacion')})
             continue
         exitos += 10
-        nom_cod, c_cod = par
+        nom_cod = pares[nom_uml]
+        c_cod = codigo[nom_cod]
         numeros = c_cod.get('lenguaje') == 'typescript'
         coincidentes.append({'uml': nom_uml, 'codigo': nom_cod, 'archivo': c_cod.get('archivo')})
 
@@ -1231,6 +1525,23 @@ def _comparar_clases_con_codigo(uml: Dict[str, Any], codigo: Dict[str, Any]) -> 
                 mult_mal.append({'asociacion': etiqueta, 'campo': campo['nombre'], 'tipo_codigo': campo['tipo'],
                                  'esperado': 'coleccion' if _es_coleccion_mult(mult) else 'un solo objeto'})
                 exitos += 1
+
+        # herencia: cada generalizacion o realizacion del diagrama debe estar en el codigo (directa o por medio de otra
+        # clase); y lo que el codigo hereda de otra clase del diagrama sin que el diagrama lo diga sobra
+        esperadas = [b for b in dict.fromkeys(c_uml.get('superclases', []) + c_uml.get('interfaces', []))
+                     if b in clases_uml and clases_uml[b].get('tipo') != 'UMLActor']
+        ancestros = _ancestros_codigo(codigo, nom_cod)
+        her_ok, her_falta = [], []
+        for b in esperadas:
+            total += 2
+            if _clave_exacta(pares.get(b, b)) in ancestros:
+                her_ok.append(b)
+                exitos += 2
+            else:
+                her_falta.append(b)
+        del_codigo = {v: k for k, v in pares.items()}
+        her_sobra = [del_codigo[x] for x in dict.fromkeys(c_cod.get('superclases', []) + c_cod.get('interfaces', []))
+                     if x in del_codigo and del_codigo[x] not in esperadas and del_codigo[x] != nom_uml]
         detalles[nom_uml] = {
             'archivo': c_cod.get('archivo'), 'estereotipo': c_uml.get('estereotipo'),
             'atributos': {'coincidentes': attrs_ok, 'faltan_en_codigo': attrs_faltan,
@@ -1239,11 +1550,15 @@ def _comparar_clases_con_codigo(uml: Dict[str, Any], codigo: Dict[str, Any]) -> 
             'metodos': {'coincidentes': mets_ok, 'faltan_en_codigo': mets_faltan,
                         'sobran_en_codigo': [m['nombre'] for m in c_cod.get('metodos', []) if _normalizar_nombre(m['nombre']) not in mets_uml]},
             'asociaciones': {'verificadas_en_codigo': verificadas, 'faltantes_en_codigo': faltan_asoc,
-                             'multiplicidad_incorrecta': mult_mal}}
+                             'multiplicidad_incorrecta': mult_mal},
+            'herencia': {'coincidentes': her_ok, 'faltan_en_codigo': her_falta, 'sobran_en_codigo': her_sobra}}
 
-    claves_uml = {_normalizar_nombre(k) for k in clases_uml}
-    sobrantes = [{'nombre': n, 'archivo': c.get('archivo')} for n, c in codigo.items() if _normalizar_nombre(n) not in claves_uml]
-    return {
+    # lo que no se emparejo es extra, salvo lo que se llama como un actor (los actores no se exigen en el codigo)
+    usados = set(pares.values())
+    claves_actores = {f(a) for a in actores for f in (_clave_exacta, _normalizar_nombre)}
+    sobrantes = [{'nombre': n, 'archivo': c.get('archivo')} for n, c in codigo.items()
+                 if n not in usados and _clave_exacta(n) not in claves_actores and _normalizar_nombre(n) not in claves_actores]
+    res = {
         'tipo_diagrama': 'UMLClassDiagram', 'diagrama': uml.get('nombre'),
         'porcentaje_sincronizacion': round(exitos / total * 100, 1) if total else 0.0,
         'resumen': {'total_clases_uml': len(clases_uml) - len(actores), 'clases_implementadas': len(coincidentes),
@@ -1251,12 +1566,17 @@ def _comparar_clases_con_codigo(uml: Dict[str, Any], codigo: Dict[str, Any]) -> 
         'actores_omitidos': actores,
         'clases_coincidentes': coincidentes, 'clases_faltantes_en_codigo': faltantes,
         'clases_sobrantes_en_codigo': sobrantes, 'detalles_por_clase': detalles}
+    if _repetidas(codigo):
+        res['clases_repetidas_en_codigo'] = _repetidas(codigo)
+    return res
 
 
 def _comparar_secuencia_con_codigo(uml: Dict[str, Any], codigo: Dict[str, Any]) -> Dict[str, Any]:
-    mapa = {}
-    for k, v in codigo.items():
-        mapa.setdefault(_normalizar_nombre(k), (k, v))
+    pares = _emparejar(list(dict.fromkeys(lf['tipo'] for lf in uml.get('lifelines', []) if lf.get('estereotipo') != 'actor')),
+                       list(codigo))
+
+    def par_de(nombre):  # nombre de la lifeline -> (nombre en el codigo, clase)
+        return (pares[nombre], codigo[pares[nombre]]) if nombre in pares else None
     kind_de = {lf['tipo']: lf.get('estereotipo') for lf in uml.get('lifelines', [])}
 
     lifelines = []
@@ -1264,7 +1584,7 @@ def _comparar_secuencia_con_codigo(uml: Dict[str, Any], codigo: Dict[str, Any]) 
         if lf.get('estereotipo') == 'actor':
             lifelines.append({'tipo_uml': lf['tipo'], 'estereotipo': 'actor', 'aplica': False})
             continue
-        par = mapa.get(_normalizar_nombre(lf['tipo']))
+        par = par_de(lf['tipo'])
         lifelines.append({'tipo_uml': lf['tipo'], 'estereotipo': lf.get('estereotipo'), 'aplica': True,
                           'en_codigo': bool(par), **({'archivo': par[1].get('archivo')} if par else {})})
 
@@ -1282,14 +1602,14 @@ def _comparar_secuencia_con_codigo(uml: Dict[str, Any], codigo: Dict[str, Any]) 
             continue
         aplicables += 1
         metodo = _normalizar_nombre(_nombre_metodo(nom))
-        par = mapa.get(_normalizar_nombre(a))
+        par = par_de(a)
         existe = bool(par) and metodo in {_normalizar_nombre(x['nombre']) for x in par[1].get('metodos', [])}
         info.update({'aplica': True, 'metodo_implementado_en_destino': existe})
         if not par:
             info['nota'] = f'Clase receptora "{a}" no encontrada en codigo'
         verificados += existe
         # flujo: la clase que envia el mensaje debe invocar ese metodo en algun punto
-        origen = mapa.get(_normalizar_nombre(de)) if k_de != 'actor' else None
+        origen = par_de(de) if k_de != 'actor' else None
         if origen:
             flujo_total += 1
             llama = metodo in {_normalizar_nombre(x['metodo']) for x in origen[1].get('llamadas', [])}
@@ -1297,7 +1617,7 @@ def _comparar_secuencia_con_codigo(uml: Dict[str, Any], codigo: Dict[str, Any]) 
             info['llamada_desde_origen'] = llama
         mensajes.append(info)
 
-    return {
+    res = {
         'tipo_diagrama': 'UMLSequenceDiagram', 'diagrama': uml.get('nombre'),
         'porcentaje_sincronizacion': round(verificados / aplicables * 100, 1) if aplicables else 0.0,
         'porcentaje_flujo': round(flujo_ok / flujo_total * 100, 1) if flujo_total else None,
@@ -1305,6 +1625,9 @@ def _comparar_secuencia_con_codigo(uml: Dict[str, Any], codigo: Dict[str, Any]) 
                     'mensajes_no_aplican': len(mensajes) - aplicables, 'mensajes_verificados_en_codigo': verificados,
                     'mensajes_pendientes': aplicables - verificados, 'llamadas_verificadas_desde_origen': flujo_ok},
         'lifelines': lifelines, 'mensajes': mensajes}
+    if _repetidas(codigo):
+        res['clases_repetidas_en_codigo'] = _repetidas(codigo)
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -1356,16 +1679,27 @@ def _partes_tipo(t: str):
     return (m.group(1), _dividir(m.group(2), ',')) if m else (None, [])
 
 
+def _tg(x: Dict[str, Any], clave: str = 'tipo') -> str:
+    """Tipo para generar: el que conserva la precision (tipo_gen, retorno_gen) o, si no viene, el normalizado."""
+    return x.get(f'{clave}_gen') or x.get(clave) or ('void' if clave == 'retorno' else 'Object')
+
+
+_IMPORTS_JAVA = {'BigDecimal': 'java.math.BigDecimal', 'BigInteger': 'java.math.BigInteger',
+                 'LocalDateTime': 'java.time.LocalDateTime', 'LocalTime': 'java.time.LocalTime'}
+
+
 def _tipo_java(t: str, caja: bool = False) -> str:
     base, args = _partes_tipo(t)
     if base == 'Map' and len(args) == 2:
         return f'Map<{_tipo_java(args[0], True)}, {_tipo_java(args[1], True)}>'
     if base:
         return f'{base}<{_tipo_java(args[0], True)}>'
-    primitivos = {'int': ('int', 'Integer'), 'double': ('double', 'Double'), 'boolean': ('boolean', 'Boolean')}
+    primitivos = {'int': ('int', 'Integer'), 'long': ('long', 'Long'), 'double': ('double', 'Double'),
+                  'boolean': ('boolean', 'Boolean')}
     if t in primitivos:
         return primitivos[t][1 if caja else 0]
-    return {'String': 'String', 'Date': 'LocalDate', 'void': 'void', 'Object': 'Object'}.get(t) or _identificador(t, 'pascal', 'java')
+    return {'String': 'String', 'Date': 'LocalDate', 'DateTime': 'LocalDateTime', 'Time': 'LocalTime', 'decimal': 'BigDecimal',
+            'BigInteger': 'BigInteger', 'void': 'void', 'Object': 'Object'}.get(t) or _identificador(t, 'pascal', 'java')
 
 
 def _tipo_python(t: str) -> str:
@@ -1374,7 +1708,8 @@ def _tipo_python(t: str) -> str:
         return f'Dict[{_tipo_python(args[0])}, {_tipo_python(args[1])}]'
     if base:
         return f'{base}[{_tipo_python(args[0])}]'
-    return {'String': 'str', 'int': 'int', 'double': 'float', 'boolean': 'bool', 'Date': 'date', 'void': 'None',
+    return {'String': 'str', 'int': 'int', 'long': 'int', 'BigInteger': 'int', 'double': 'float', 'decimal': 'Decimal',
+            'boolean': 'bool', 'Date': 'date', 'DateTime': 'datetime', 'Time': 'time', 'void': 'None',
             'Object': 'Any'}.get(t) or _identificador(t, 'pascal', 'python')
 
 
@@ -1387,7 +1722,8 @@ def _tipo_ts(t: str) -> str:
     if base == 'List':
         inner = _tipo_ts(args[0])
         return f'{inner}[]' if re.fullmatch(r'\w+', inner) else f'Array<{inner}>'
-    return {'String': 'string', 'int': 'number', 'double': 'number', 'boolean': 'boolean', 'Date': 'Date', 'void': 'void',
+    return {'String': 'string', 'int': 'number', 'long': 'number', 'double': 'number', 'decimal': 'number',
+            'BigInteger': 'bigint', 'boolean': 'boolean', 'Date': 'Date', 'DateTime': 'Date', 'Time': 'string', 'void': 'void',
             'Object': 'unknown'}.get(t) or _identificador(t, 'pascal', 'typescript')
 
 
@@ -1399,8 +1735,9 @@ def _tipo_cs(t: str) -> str:
         return f'HashSet<{_tipo_cs(args[0])}>'
     if base:
         return f'List<{_tipo_cs(args[0])}>'
-    return {'String': 'string', 'int': 'int', 'double': 'double', 'boolean': 'bool', 'Date': 'DateTime', 'void': 'void',
-            'Object': 'object'}.get(t) or _identificador(t, 'pascal', 'csharp')
+    return {'String': 'string', 'int': 'int', 'long': 'long', 'double': 'double', 'decimal': 'decimal',
+            'BigInteger': 'System.Numerics.BigInteger', 'boolean': 'bool', 'Date': 'DateTime', 'DateTime': 'DateTime',
+            'Time': 'TimeSpan', 'void': 'void', 'Object': 'object'}.get(t) or _identificador(t, 'pascal', 'csharp')
 
 
 def _clases_en_tipo(t: str, conocidas: set) -> List[str]:
@@ -1446,61 +1783,121 @@ def _metodos_con_interfaces(c, todas):
     return metodos
 
 
+def _params_unicos(m: Dict[str, Any], lang: str):
+    """[(identificador, tipo para generar)] de los parametros, sin nombres vacios ni repetidos (no compilarian)."""
+    res, usados = [], ({'self'} if lang == 'python' else set())
+    for i, p in enumerate(m.get('parametros', [])):
+        n = _identificador(p.get('nombre') or f'p{i + 1}', 'camel', lang)
+        base, k = n, 2
+        while n in usados:
+            n, k = f'{base}{k}', k + 1
+        usados.add(n)
+        res.append((n, _tg(p)))
+    return res
+
+
+def _metodos_unicos(metodos, lang, nombre_de, firma_de=None, ocupadas=(), campos=()):
+    """[(identificador, metodo, parametros)] sin dos metodos con la misma firma, que no compilarian (firma_de da la
+    parte de los parametros; sin ella cuenta solo el nombre). Se omite el metodo cuya (nombre, numero de parametros)
+    ya esta en ocupadas (un get/set que ya sale del campo) y al que se llama como un campo (en C#, TypeScript y
+    Python no pueden compartir nombre) se le agrega '_'."""
+    res, vistas = [], set()
+    for m in metodos:
+        nom = nombre_de(m['nombre'])
+        params = _params_unicos(m, lang)
+        if (nom, len(params)) in ocupadas:
+            continue
+        if nom in campos:
+            nom += '_'
+        firma = (nom, firma_de(params) if firma_de else ())
+        if firma in vistas:
+            continue
+        vistas.add(firma)
+        res.append((nom, m, params))
+    return res
+
+
 def _generar_clase_java(c: Dict[str, Any], todas: Dict[str, Any] = None, paquete: str = 'modelo') -> str:
     todas = todas or {}
     nom = _identificador(c['nombre'], 'pascal', 'java')
-    lineas = ([f'package {paquete};', ''] if paquete else []) + ['import java.util.*;', 'import java.time.LocalDate;', '']
+    lineas = []
     if c.get('documentacion'):
         lineas += ['/**'] + _comentario_doc(c['documentacion']) + [' */']
+
+    def firma(params):  # Java no admite dos metodos con los mismos parametros (sin contar los genericos)
+        return tuple(re.sub(r'<.*>', '', _tipo_java(t)) for _, t in params)
+
+    def nombre_metodo(n):
+        return _identificador(n, 'camel', 'java')
+
+    def con_params(params):
+        return ', '.join(f'{_tipo_java(t)} {p}' for p, t in params)
     if c.get('tipo') == 'UMLEnumeration':
-        lits = [_identificador(l, 'pascal', 'java').upper() for l in c.get('literales', [])] or ['VALOR']
-        return '\n'.join(lineas + [f'public enum {nom} {{', '    ' + ', '.join(lits) + ';', '}']) + '\n'
-    supers = [s for s in c.get('superclases', []) if s in todas]
-    ifaces = [i for i in c.get('interfaces', []) if i in todas]
-    if c.get('tipo') == 'UMLInterface':
-        cab = f'public interface {nom}' + (' extends ' + ', '.join(_identificador(i, 'pascal', 'java') for i in supers + ifaces) if supers + ifaces else '')
+        lits = list(dict.fromkeys(_identificador(l, 'pascal', 'java').upper() for l in c.get('literales', []))) or ['VALOR']
+        lineas += [f'public enum {nom} {{', '    ' + ', '.join(lits) + ';', '}']
+    elif c.get('tipo') == 'UMLInterface':
+        bases = [s for s in c.get('superclases', []) + c.get('interfaces', []) if s in todas]
+        cab = f'public interface {nom}' + (' extends ' + ', '.join(_identificador(i, 'pascal', 'java') for i in bases) if bases else '')
         lineas.append(cab + ' {')
-        for m in c.get('metodos', []):
-            params = ', '.join(f"{_tipo_java(p['tipo'])} {_identificador(p['nombre'], 'camel', 'java')}" for p in m.get('parametros', []))
-            lineas.append(f"    {_tipo_java(m.get('retorno') or 'void')} {_identificador(m['nombre'], 'camel', 'java')}({params});")
-        return '\n'.join(lineas + ['}']) + '\n'
-    cab = f'public class {nom}'
-    if supers:
-        cab += f' extends {_identificador(supers[0], "pascal", "java")}'
-    if ifaces:
-        cab += ' implements ' + ', '.join(_identificador(i, 'pascal', 'java') for i in ifaces)
-    lineas.append(cab + ' {')
-    campos = [(_identificador(a['nombre'], 'camel', 'java'), a.get('tipo') or 'Object') for a in c.get('atributos', [])]
-    asocs = _campos_asociacion(c, 'java', todas)
-    for n, t in campos:
-        lineas.append(f'    private {_tipo_java(t)} {n};')
-    for n, t in asocs:
-        jt = _tipo_java(t)
-        lineas.append(f'    private {jt} {n}' + (' = new ArrayList<>();' if jt.startswith('List<') else ';'))
-    lineas += ['', f'    public {nom}() {{}}', '']
-    for n, t in campos + asocs:
-        cap = n[0].upper() + n[1:]
-        lineas.append(f'    public {_tipo_java(t)} get{cap}() {{ return this.{n}; }}')
-        lineas.append(f'    public void set{cap}({_tipo_java(t)} {n}) {{ this.{n} = {n}; }}')
-        lineas.append('')
-    defecto = {'int': '0', 'double': '0.0', 'boolean': 'false'}
-    for m in _metodos_con_interfaces(c, todas):
-        ret = m.get('retorno') or 'void'
-        params = ', '.join(f"{_tipo_java(p['tipo'])} {_identificador(p['nombre'], 'camel', 'java')}" for p in m.get('parametros', []))
-        lineas.append(f"    public {_tipo_java(ret)} {_identificador(m['nombre'], 'camel', 'java')}({params}) {{")
-        if ret != 'void':
-            lineas.append(f"        return {defecto.get(ret, 'null')};")
-        lineas += ['    }', '']
-    return '\n'.join(lineas + ['}']) + '\n'
+        for n, m, params in _metodos_unicos(c.get('metodos', []), 'java', nombre_metodo, firma):
+            lineas.append(f"    {_tipo_java(_tg(m, 'retorno'))} {n}({con_params(params)});")
+        lineas.append('}')
+    else:
+        supers = [s for s in c.get('superclases', []) if s in todas]
+        ifaces = [i for i in c.get('interfaces', []) if i in todas]
+        cab = f'public class {nom}'
+        if supers:
+            cab += f' extends {_identificador(supers[0], "pascal", "java")}'
+        if ifaces:
+            cab += ' implements ' + ', '.join(_identificador(i, 'pascal', 'java') for i in ifaces)
+        lineas.append(cab + ' {')
+        campos = []
+        for a in c.get('atributos', []):
+            n = _identificador(a['nombre'], 'camel', 'java')
+            if n not in [x for x, _ in campos]:  # dos atributos con el mismo identificador no compilarian
+                campos.append((n, _tg(a)))
+        asocs = _campos_asociacion(c, 'java', todas)
+        for n, t in campos:
+            lineas.append(f'    private {_tipo_java(t)} {n};')
+        for n, t in asocs:
+            jt = _tipo_java(t)
+            lineas.append(f'    private {jt} {n}' + (' = new ArrayList<>();' if jt.startswith('List<') else ';'))
+        lineas += ['', f'    public {nom}() {{}}', '']
+        accesores = set()
+        for n, t in campos + asocs:
+            cap = n[0].upper() + n[1:]
+            lineas.append(f'    public {_tipo_java(t)} get{cap}() {{ return this.{n}; }}')
+            lineas.append(f'    public void set{cap}({_tipo_java(t)} {n}) {{ this.{n} = {n}; }}')
+            lineas.append('')
+            accesores |= {(f'get{cap}', 0), (f'set{cap}', 1)}
+        defecto = {'int': '0', 'long': '0L', 'double': '0.0', 'boolean': 'false'}
+        # los get/set del modelo que ya salen de un campo no se repiten: queda el generado, con el tipo del campo
+        for n, m, params in _metodos_unicos(_metodos_con_interfaces(c, todas), 'java', nombre_metodo, firma, accesores):
+            ret = _tg(m, 'retorno')
+            lineas.append(f"    public {_tipo_java(ret)} {n}({con_params(params)}) {{")
+            if ret != 'void':
+                lineas.append(f"        return {defecto.get(ret, 'null')};")
+            lineas += ['    }', '']
+        if lineas[-1] == '':
+            lineas.pop()
+        lineas.append('}')
+    # imports de los tipos que no estan en java.util (solo los que se usan y no chocan con una clase del diagrama)
+    propias = {_identificador(n, 'pascal', 'java') for n in todas}
+    texto = '\n'.join(lineas)
+    extra = [f'import {imp};' for corto, imp in sorted(_IMPORTS_JAVA.items())
+             if corto not in propias and re.search(rf'\b{corto}\b', texto)]
+    cabecera = ([f'package {paquete};', ''] if paquete else []) + ['import java.util.*;', 'import java.time.LocalDate;'] + extra
+    return '\n'.join(cabecera + [''] + lineas) + '\n'
 
 
 def _generar_clase_python(c: Dict[str, Any], todas: Dict[str, Any] = None) -> str:
     todas = todas or {}
     nom = _identificador(c['nombre'], 'pascal', 'python')
     lineas = ['from __future__ import annotations', '', 'from abc import ABC, abstractmethod',
-              'from dataclasses import dataclass, field', 'from datetime import date', 'from enum import Enum',
-              'from typing import Any, Dict, List, Optional, Set', '']
-    bases = [_identificador(s, 'pascal', 'python') for s in c.get('superclases', []) + c.get('interfaces', []) if s in todas]
+              'from dataclasses import dataclass, field', 'from datetime import date, datetime, time', 'from decimal import Decimal',
+              'from enum import Enum', 'from typing import Any, Dict, List, Optional, Set', '']
+    bases = list(dict.fromkeys(_identificador(s, 'pascal', 'python') for s in c.get('superclases', []) + c.get('interfaces', [])
+                               if s in todas))
     for b in bases:  # funciona como paquete (import relativo) o con los archivos sueltos
         lineas += ['try:', f'    from .{b} import {b}', 'except ImportError:', f'    from {b} import {b}']
     lineas.append('')
@@ -1509,8 +1906,7 @@ def _generar_clase_python(c: Dict[str, Any], todas: Dict[str, Any] = None) -> st
         lineas.append(f'class {nom}(Enum):')
         if doc:
             lineas.append(f'    """{doc}"""')
-        for l in c.get('literales', []) or ['VALOR']:
-            ident = _identificador(l, 'pascal', 'python').upper()
+        for ident in dict.fromkeys(_identificador(l, 'pascal', 'python').upper() for l in c.get('literales', []) or ['VALOR']):
             lineas.append(f"    {ident} = '{ident}'")
         return '\n'.join(lineas) + '\n'
     es_interfaz = c.get('tipo') == 'UMLInterface'
@@ -1518,18 +1914,24 @@ def _generar_clase_python(c: Dict[str, Any], todas: Dict[str, Any] = None) -> st
         lineas.append('@dataclass')
     lineas.append(f"class {nom}({', '.join(bases or (['ABC'] if es_interfaz else []))}):" if (bases or es_interfaz) else f'class {nom}:')
     cuerpo = [f'    """{doc}"""'] if doc else []
+    campos = set()
     if not es_interfaz:
         for a in c.get('atributos', []):
-            cuerpo.append(f"    {_identificador(a['nombre'], 'camel', 'python')}: Optional[{_tipo_python(a.get('tipo') or 'Object')}] = None")
+            n = _identificador(a['nombre'], 'camel', 'python')
+            if n not in campos:
+                campos.add(n)
+                cuerpo.append(f"    {n}: Optional[{_tipo_python(_tg(a))}] = None")
         for n, t in _campos_asociacion(c, 'python', todas):
+            campos.add(n)
             if t.startswith('List<'):
                 cuerpo.append(f'    {n}: {_tipo_python(t)} = field(default_factory=list)')
             else:
                 cuerpo.append(f'    {n}: Optional[{_tipo_python(t)}] = None')
-    for m in (c.get('metodos', []) if es_interfaz else _metodos_con_interfaces(c, todas)):
-        params = ''.join(f", {_identificador(p['nombre'], 'camel', 'python')}: {_tipo_python(p['tipo'])}" for p in m.get('parametros', []))
+    metodos = c.get('metodos', []) if es_interfaz else _metodos_con_interfaces(c, todas)
+    for n, m, params in _metodos_unicos(metodos, 'python', lambda x: _identificador(x, 'camel', 'python'), campos=campos):
         cuerpo += [''] + (['    @abstractmethod'] if es_interfaz else [])
-        cuerpo.append(f"    def {_identificador(m['nombre'], 'camel', 'python')}(self{params}) -> {_tipo_python(m.get('retorno') or 'void')}:")
+        firma = ''.join(f', {p}: {_tipo_python(t)}' for p, t in params)
+        cuerpo.append(f"    def {n}(self{firma}) -> {_tipo_python(_tg(m, 'retorno'))}:")
         cuerpo.append('        raise NotImplementedError')
     return '\n'.join(lineas + (cuerpo or ['    pass'])) + '\n'
 
@@ -1538,9 +1940,9 @@ def _generar_clase_typescript(c: Dict[str, Any], todas: Dict[str, Any] = None) -
     todas = todas or {}
     nom = _identificador(c['nombre'], 'pascal', 'typescript')
     conocidas = {_identificador(n, 'pascal', 'typescript') for n in todas}
-    tipos = [a.get('tipo') or 'Object' for a in c.get('atributos', [])] + [t for _, t in _campos_asociacion(c, 'typescript', todas)]
+    tipos = [_tg(a) for a in c.get('atributos', [])] + [t for _, t in _campos_asociacion(c, 'typescript', todas)]
     for m in _metodos_con_interfaces(c, todas):
-        tipos += [m.get('retorno') or 'void'] + [p['tipo'] for p in m.get('parametros', [])]
+        tipos += [_tg(m, 'retorno')] + [_tg(p) for p in m.get('parametros', [])]
     supers = [s for s in c.get('superclases', []) if s in todas]
     ifaces = [i for i in c.get('interfaces', []) if i in todas]
     usadas = set()
@@ -1552,16 +1954,27 @@ def _generar_clase_typescript(c: Dict[str, Any], todas: Dict[str, Any] = None) -
     if c.get('documentacion'):
         lineas += ['/**'] + _comentario_doc(c['documentacion']) + [' */']
     if c.get('tipo') == 'UMLEnumeration':
-        lits = [_identificador(l, 'pascal', 'typescript').upper() for l in c.get('literales', [])] or ['VALOR']
+        lits = list(dict.fromkeys(_identificador(l, 'pascal', 'typescript').upper() for l in c.get('literales', []))) or ['VALOR']
         return '\n'.join(lineas + [f'export enum {nom} {{'] + [f"  {l} = '{l}'," for l in lits] + ['}']) + '\n'
+
+    def nombre_metodo(n):
+        return _identificador(n, 'camel', 'typescript')
+
+    def con_params(params):
+        return ', '.join(f'{p}: {_tipo_ts(t)}' for p, t in params)
+    campos = []
+    for a in c.get('atributos', []):
+        n = _identificador(a['nombre'], 'camel', 'typescript')
+        if n not in [x for x, _ in campos]:
+            campos.append((n, _tg(a)))
+    # TypeScript no admite dos metodos con el mismo nombre (sin firma: cuenta solo el nombre)
     if c.get('tipo') == 'UMLInterface':
         cab = f'export interface {nom}' + (' extends ' + ', '.join(_identificador(i, 'pascal', 'typescript') for i in supers + ifaces) if supers + ifaces else '')
         lineas.append(cab + ' {')
-        for a in c.get('atributos', []):
-            lineas.append(f"  {_identificador(a['nombre'], 'camel', 'typescript')}?: {_tipo_ts(a.get('tipo') or 'Object')};")
-        for m in c.get('metodos', []):
-            params = ', '.join(f"{_identificador(p['nombre'], 'camel', 'typescript')}: {_tipo_ts(p['tipo'])}" for p in m.get('parametros', []))
-            lineas.append(f"  {_identificador(m['nombre'], 'camel', 'typescript')}({params}): {_tipo_ts(m.get('retorno') or 'void')};")
+        for n, t in campos:
+            lineas.append(f"  {n}?: {_tipo_ts(t)};")
+        for n, m, params in _metodos_unicos(c.get('metodos', []), 'typescript', nombre_metodo, campos={x for x, _ in campos}):
+            lineas.append(f"  {n}({con_params(params)}): {_tipo_ts(_tg(m, 'retorno'))};")
         return '\n'.join(lineas + ['}']) + '\n'
     cab = f'export class {nom}'
     if supers:
@@ -1569,16 +1982,16 @@ def _generar_clase_typescript(c: Dict[str, Any], todas: Dict[str, Any] = None) -
     if ifaces:
         cab += ' implements ' + ', '.join(_identificador(i, 'pascal', 'typescript') for i in ifaces)
     lineas.append(cab + ' {')
-    for a in c.get('atributos', []):
-        lineas.append(f"  public {_identificador(a['nombre'], 'camel', 'typescript')}?: {_tipo_ts(a.get('tipo') or 'Object')};")
-    for n, t in _campos_asociacion(c, 'typescript', todas):
+    for n, t in campos:
+        lineas.append(f"  public {n}?: {_tipo_ts(t)};")
+    asocs = _campos_asociacion(c, 'typescript', todas)
+    for n, t in asocs:
         lineas.append(f'  public {n}: {_tipo_ts(t)} = [];' if t.startswith('List<') else f'  public {n}?: {_tipo_ts(t)};')
     lineas += ['', f'  constructor(init?: Partial<{nom}>) {{'] + (['    super();'] if supers else []) + \
               ['    Object.assign(this, init);', '  }']
-    for m in _metodos_con_interfaces(c, todas):
-        ret = _tipo_ts(m.get('retorno') or 'void')
-        params = ', '.join(f"{_identificador(p['nombre'], 'camel', 'typescript')}: {_tipo_ts(p['tipo'])}" for p in m.get('parametros', []))
-        lineas += ['', f"  public {_identificador(m['nombre'], 'camel', 'typescript')}({params}): {ret} {{",
+    ocupados = {x for x, _ in campos} | {x for x, _ in asocs}
+    for n, m, params in _metodos_unicos(_metodos_con_interfaces(c, todas), 'typescript', nombre_metodo, campos=ocupados):
+        lineas += ['', f"  public {n}({con_params(params)}): {_tipo_ts(_tg(m, 'retorno'))} {{",
                    "    throw new Error('No implementado');", '  }']
     return '\n'.join(lineas + ['}']) + '\n'
 
@@ -1594,8 +2007,11 @@ def _generar_clase_csharp(c: Dict[str, Any], todas: Dict[str, Any] = None, espac
         n = n[0].upper() + n[1:]
         return n + '_' if n == nom or n in _RESERVADAS['csharp'] else n
 
-    def params(m):
-        return ', '.join(f"{_tipo_cs(p['tipo'])} {_identificador(p['nombre'], 'camel', 'csharp')}" for p in m.get('parametros', []))
+    def firma(params):  # C# no admite dos metodos con los mismos tipos de parametros
+        return tuple(_tipo_cs(t) for _, t in params)
+
+    def con_params(params):
+        return ', '.join(f'{_tipo_cs(t)} {p}' for p, t in params)
 
     cuerpo = []
     if c.get('documentacion'):
@@ -1604,24 +2020,29 @@ def _generar_clase_csharp(c: Dict[str, Any], todas: Dict[str, Any] = None, espac
     supers = [s for s in c.get('superclases', []) if s in todas]
     ifaces = [i for i in c.get('interfaces', []) if i in todas]
     if c.get('tipo') == 'UMLEnumeration':
-        lits = [_identificador(l, 'pascal', 'csharp') for l in c.get('literales', [])] or ['Valor']
+        lits = list(dict.fromkeys(_identificador(l, 'pascal', 'csharp') for l in c.get('literales', []))) or ['Valor']
         cuerpo += [f'public enum {nom}', '{'] + [f'    {l},' for l in lits] + ['}']
     elif c.get('tipo') == 'UMLInterface':
         bases = [_identificador(i, 'pascal', 'csharp') for i in supers + ifaces]
         cuerpo += [f'public interface {nom}' + (' : ' + ', '.join(bases) if bases else ''), '{']
-        for m in c.get('metodos', []):
-            cuerpo.append(f"    {_tipo_cs(m.get('retorno') or 'void')} {miembro(m['nombre'])}({params(m)});")
+        for n, m, params in _metodos_unicos(c.get('metodos', []), 'csharp', miembro, firma):
+            cuerpo.append(f"    {_tipo_cs(_tg(m, 'retorno'))} {n}({con_params(params)});")
         cuerpo.append('}')
     else:
         bases = [_identificador(s, 'pascal', 'csharp') for s in supers[:1] + ifaces]
         cuerpo += [f'public class {nom}' + (' : ' + ', '.join(bases) if bases else ''), '{']
+        props = set()
         for a in c.get('atributos', []):
-            cuerpo.append(f"    public {_tipo_cs(a.get('tipo') or 'Object')} {miembro(a['nombre'])} {{ get; set; }}")
+            n = miembro(a['nombre'])
+            if n not in props:  # dos propiedades con el mismo nombre no compilarian
+                props.add(n)
+                cuerpo.append(f"    public {_tipo_cs(_tg(a))} {n} {{ get; set; }}")
         for n, t in _campos_asociacion(c, 'csharp', todas):
-            ct = _tipo_cs(t)
-            cuerpo.append(f'    public {ct} {miembro(n)} {{ get; set; }}' + (f' = new {ct}();' if ct.startswith('List<') else ''))
-        for m in _metodos_con_interfaces(c, todas):
-            cuerpo += ['', f"    public {_tipo_cs(m.get('retorno') or 'void')} {miembro(m['nombre'])}({params(m)})", '    {',
+            ct, n = _tipo_cs(t), miembro(n)
+            props.add(n)
+            cuerpo.append(f'    public {ct} {n} {{ get; set; }}' + (f' = new {ct}();' if ct.startswith('List<') else ''))
+        for n, m, params in _metodos_unicos(_metodos_con_interfaces(c, todas), 'csharp', miembro, firma, campos=props):
+            cuerpo += ['', f"    public {_tipo_cs(_tg(m, 'retorno'))} {n}({con_params(params)})", '    {',
                        '        throw new NotImplementedException();', '    }']
         cuerpo.append('}')
     lineas = ['#nullable disable', '', 'using System;', 'using System.Collections.Generic;', '']
@@ -1695,14 +2116,57 @@ def generar_codigo_desde_diagrama(doc, nombre_diagrama: str, lenguaje: str = 'ja
 # Importador de codigo hacia .mdj (Codigo -> Diagrama)
 # ---------------------------------------------------------------------------
 
-def _tipo_para_uml(t: str) -> str:
-    return '' if t in ('Object', '', None) else t
+def _tipo_go_modelo(t: str) -> str:
+    """Tipo de Go con la sintaxis de UML, sin perder el tamano: []T -> List<T>, map[K]V -> Map<K, V>, *T -> T,
+    time.Time -> DateTime; int64, float32... quedan como estan."""
+    t = (t or '').strip()
+    while t.startswith('*'):
+        t = t[1:].strip()
+    if t.startswith('...'):
+        return f'List<{_tipo_go_modelo(t[3:])}>'
+    m = re.match(r'\[[^\]]*\]\s*(.+)$', t)
+    if m:
+        return f'List<{_tipo_go_modelo(m.group(1))}>'
+    if t.startswith('map['):
+        k = _cerrar_par(t, 3, '[', ']')
+        return f'Map<{_tipo_go_modelo(t[4:k])}, {_tipo_go_modelo(t[k + 1:])}>'
+    if t in ('interface{}', 'interface {}', 'any') or t.startswith(('chan ', 'func')):
+        return ''
+    return 'DateTime' if t == 'time.Time' else t
+
+
+def _tipo_para_modelo(original, normalizado, lenguaje: str = '') -> str:
+    """Tipo que se guarda en el modelo al importar: el del codigo como esta escrito (long, BigDecimal, LocalDateTime y
+    los genericos no cambian), sin paquetes delante. Vacio si no se sabe (Object, any, var)."""
+    t = _tipo_go_modelo(original) if lenguaje == 'go' and original else (original or '').strip()
+    if not t:
+        return '' if normalizado in ('Object', '', None) else normalizado
+    t = t.replace('"', '').replace("'", '')
+    t = re.sub(r'^(final|const|readonly)\s+', '', t)
+    t = re.sub(r'(?:[A-Za-z_$][\w$]*\.)+(?=[A-Za-z_$])', '', t)  # java.util.List<com.x.Pedido> -> List<Pedido>
+    return '' if _normalizar_tipo(t) == 'Object' else t
+
+
+def _clase_en_paquete(pk: Dict[str, Any], nombre: str, tipos=('UMLClass', 'UMLInterface', 'UMLEnumeration')):
+    """La clase del paquete que corresponde a una clase del codigo: primero por nombre exacto y, si no hay, sin acentos,
+    espacios ni mayusculas ('Orden de Entrega' para OrdenDeEntrega). Nunca por el nombre sin prefijo: BC_Cliente no es
+    Cliente. Devuelve (clase o None, candidatas si hay mas de una)."""
+    hijos = [e for e in pk.get('ownedElements', []) if isinstance(e, dict) and e.get('_type') in tipos]
+    for clave in (lambda x: x, _clave_exacta):
+        cands = [e for e in hijos if clave(e.get('name') or '') == clave(nombre)]
+        if cands:
+            return (cands[0], []) if len(cands) == 1 else (None, cands)
+    return None, []
 
 
 def importar_codigo_a_diagrama(doc, ruta_codigo: str, paquete_nombre: str, nombre_diagrama: str = None, lenguaje: str = 'auto',
                                modo: str = 'agregar', metodos: bool = True) -> Dict[str, Any]:
-    """Importa clases (o interfaces), atributos con su tipo y metodos desde codigo hacia el modelo .mdj y, si se indica,
-    las dibuja en un diagrama. modo='agregar' solo agrega lo que falte; 'sincronizar' deja exactamente lo del codigo."""
+    """Importa clases (o interfaces), atributos con su tipo y metodos desde codigo hacia un paquete del .mdj y, si se
+    indica, dibuja las clases nuevas en un diagrama. Solo agrega lo que falta: nunca quita atributos, metodos ni
+    clases. Cada clase se busca solo en el paquete pedido; si no esta ahi se crea ahi (una homonima de otro paquete no
+    se toca). Si una clase del codigo corresponde a mas de una del paquete, no se cambia nada y se avisa.
+    modo='agregar' completa solo los tipos vacios; 'sincronizar' ademas pone el tipo del codigo en los atributos que ya
+    tienen otro y reporta, sin quitarlos, los atributos y metodos que el codigo ya no tiene."""
     import staruml_mdj as M
     if modo not in ('agregar', 'sincronizar'):
         raise ValueError(f'modo debe ser "agregar" o "sincronizar", no "{modo}"')
@@ -1710,75 +2174,100 @@ def importar_codigo_a_diagrama(doc, ruta_codigo: str, paquete_nombre: str, nombr
     if not clases_codigo:
         raise ValueError(f"No se encontraron clases en {ruta_codigo}")
     pk = doc.find(paquete_nombre, types=('UMLPackage', 'UMLModel', 'UMLSubsystem'))
+    dg = doc.diagram(nombre_diagrama) if nombre_diagrama else None
+    if dg is not None and dg.get('_type') != 'UMLClassDiagram':
+        raise ValueError(f'"{dg.get("name")}" es {dg.get("_type")}: las clases solo se dibujan en un diagrama de clases')
     tipos_modelo = ('UMLClass', 'UMLInterface', 'UMLEnumeration')
-    creadas, actualizadas, ambiguas = [], [], []
-    attrs_agregados, attrs_quitados, mets_agregados, mets_quitados, mets_omitidos = {}, {}, {}, {}, {}
+    # primero se resuelve cada clase; si alguna es ambigua no se toca nada
+    destinos, ambiguas = {}, []
+    for nom in clases_codigo:
+        destinos[nom], cands = _clase_en_paquete(pk, nom, tipos_modelo)
+        if cands:
+            ambiguas.append(f'{nom} ({", ".join(repr(e.get("name")) for e in cands)})')
+    if ambiguas:
+        raise ValueError(f'En el paquete "{pk.get("name")}" hay mas de una clase para: {"; ".join(ambiguas)}. '
+                         'Deja una sola o importa a otro paquete; no se cambio nada.')
+    creadas, actualizadas = [], []
+    attrs_agregados, tipos_cambiados, mets_agregados, mets_omitidos, lits_agregados, sin_codigo = {}, {}, {}, {}, {}, {}
 
     for nom, c_cod in clases_codigo.items():
-        clave = _normalizar_nombre(nom)
-        cands = [o for o in doc.ids.values() if o and o.get('_type') in tipos_modelo and _normalizar_nombre(o.get('name', '')) == clave]
-        en_pk = [o for o in cands if doc.parent.get(o['_id']) == pk['_id']]
-        if len(en_pk) == 1 or len(cands) == 1:
-            destino = en_pk[0] if len(en_pk) == 1 else cands[0]
-            actualizadas.append(nom)
-        elif cands:
-            ambiguas.append(nom)
-            continue
-        else:
+        lang = c_cod.get('lenguaje') or ''
+        destino = destinos[nom]
+        if destino is None:
             tipo = {'interface': 'UMLInterface', 'enum': 'UMLEnumeration'}.get(c_cod.get('tipo_decl'), 'UMLClass')
             destino = {'_type': tipo, '_id': doc.new_id(), '_parent': M.ref(pk['_id']), 'name': nom}
-            if tipo == 'UMLEnumeration':
-                destino['literals'] = [{'_type': 'UMLEnumerationLiteral', '_id': doc.new_id(), '_parent': M.ref(destino['_id']),
-                                        'name': l} for l in c_cod.get('literales', [])]
             pk.setdefault('ownedElements', []).append(destino)
             doc.reindex()
             creadas.append(nom)
+        else:
+            actualizadas.append(destino.get('name') or nom)
+        nombre_modelo = destino.get('name') or nom
         kind = doc.kind(destino)
         if destino['_type'] == 'UMLEnumeration':
+            presentes = {_clave_exacta(l.get('name', '')) for l in destino.get('literals', [])}
+            nuevos = [l for l in dict.fromkeys(c_cod.get('literales', [])) if _clave_exacta(l) not in presentes]
+            destino.setdefault('literals', []).extend(
+                {'_type': 'UMLEnumerationLiteral', '_id': doc.new_id(), '_parent': M.ref(destino['_id']), 'name': l} for l in nuevos)
+            if not destino['literals']:
+                del destino['literals']
+            if nuevos and nom not in creadas:
+                lits_agregados[nombre_modelo] = nuevos
             continue
 
-        # atributos (con su tipo). En boundary y control no van atributos.
+        # atributos (con el tipo del codigo). En boundary y control no van atributos.
         attrs = list({a['nombre']: a for a in c_cod.get('atributos', [])}.values())
+        cambio_tipo = False
         if attrs and kind not in ('boundary', 'control'):
-            existentes = {_normalizar_nombre(a.get('name', '')): a for a in destino.get('attributes', [])}
-            if modo == 'sincronizar':
-                nombres = list(dict.fromkeys(existentes.get(_normalizar_nombre(a['nombre']), {}).get('name') or a['nombre'] for a in attrs))
-                antes = {a.get('name') for a in destino.get('attributes', [])}
-                quitados = M.set_atributos(doc, destino, nombres)
-                if quitados:
-                    attrs_quitados[nom] = quitados
-                agregados = [n for n in nombres if n not in antes]
-            else:
-                agregados = M.agregar_atributos(doc, destino, [a['nombre'] for a in attrs if _normalizar_nombre(a['nombre']) not in existentes])
-            por_clave = {_normalizar_nombre(a['nombre']): a for a in attrs}
+            existentes = {_clave_exacta(a.get('name', '')) for a in destino.get('attributes', [])}
+            agregados = M.agregar_atributos(doc, destino, [a['nombre'] for a in attrs if _clave_exacta(a['nombre']) not in existentes])
+            por_clave = {_clave_exacta(a['nombre']): a for a in attrs}
             for a in destino.get('attributes', []):
-                ac = por_clave.get(_normalizar_nombre(a.get('name', '')))
-                # en 'agregar' solo se completa un tipo vacio; en 'sincronizar' manda el codigo
-                if ac and _tipo_para_uml(ac['tipo']) and (modo == 'sincronizar' or not a.get('type')):
-                    a['type'] = _tipo_para_uml(ac['tipo'])
+                ac = por_clave.get(_clave_exacta(a.get('name', '')))
+                tipo = _tipo_para_modelo(ac.get('tipo_original'), ac.get('tipo'), lang) if ac else ''
+                actual = a.get('type')
+                actual = doc.name_of(actual.get('$ref')) if isinstance(actual, dict) else (actual or '')
+                if not tipo or _normalizar_tipo(actual, True) == _normalizar_tipo(tipo, True) and actual:
+                    continue  # mismo tipo escrito de otra forma (String y string): no se toca
+                # en 'agregar' solo se completa un tipo vacio; en 'sincronizar' se pone el del codigo
+                if not actual:
+                    a['type'] = tipo
+                    cambio_tipo = True
+                elif modo == 'sincronizar':
+                    tipos_cambiados.setdefault(nombre_modelo, []).append(f"{a.get('name')}: {actual} -> {tipo}")
+                    a['type'] = tipo
+                    cambio_tipo = True
             if agregados:
-                attrs_agregados[nom] = agregados
+                attrs_agregados[nombre_modelo] = agregados
+            if modo == 'sincronizar':
+                fuera = [a.get('name') for a in destino.get('attributes', []) if _clave_exacta(a.get('name', '')) not in por_clave]
+                if fuera:
+                    sin_codigo.setdefault(nombre_modelo, {})['atributos'] = fuera
+        if cambio_tipo:  # las vistas que ya tiene la clase muestran el tipo nuevo
+            for _, v in doc.views_of(destino['_id']):
+                M.rehacer_atributos_vista(doc, v, destino, conservar_alto=True)
 
         # metodos. En el analisis de robustez (boundary, control, entity) no se ponen metodos.
         if metodos and c_cod.get('metodos'):
             if kind in ('boundary', 'control', 'entity'):
-                mets_omitidos[nom] = [m['nombre'] for m in c_cod['metodos']]
+                mets_omitidos[nombre_modelo] = [m['nombre'] for m in c_cod['metodos']]
             else:
                 ops = destino.setdefault('operations', [])
-                por_clave = {_normalizar_nombre(o.get('name', '')): o for o in ops}
-                codigo_claves = set()
-                nuevos = []
+                presentes = {_clave_exacta(o.get('name', '')) for o in ops}
+                codigo_claves, nuevos = set(), []
                 for m in c_cod['metodos']:
-                    k = _normalizar_nombre(m['nombre'])
+                    k = _clave_exacta(m['nombre'])
                     codigo_claves.add(k)
-                    if k in por_clave:
+                    if k in presentes:
                         continue
+                    presentes.add(k)
+                    originales = m.get('tipos_originales') or {}
                     op = {'_type': 'UMLOperation', '_id': doc.new_id(), '_parent': M.ref(destino['_id']), 'name': m['nombre']}
                     params = [{'_type': 'UMLParameter', '_id': doc.new_id(), '_parent': M.ref(op['_id']), 'name': p['nombre'],
-                               'type': _tipo_para_uml(p['tipo'])} for p in m.get('parametros', [])]
+                               'type': _tipo_para_modelo(p.get('tipo_original') or originales.get(p['nombre']), p['tipo'], lang)}
+                              for p in m.get('parametros', [])]
                     if m.get('retorno') not in ('void', None):
                         params.append({'_type': 'UMLParameter', '_id': doc.new_id(), '_parent': M.ref(op['_id']),
-                                       'type': _tipo_para_uml(m['retorno']), 'direction': 'return'})
+                                       'type': _tipo_para_modelo(m.get('retorno_original'), m['retorno'], lang), 'direction': 'return'})
                     if params:
                         op['parameters'] = params
                     if m.get('visibilidad') in ('private', 'protected'):
@@ -1786,26 +2275,23 @@ def importar_codigo_a_diagrama(doc, ruta_codigo: str, paquete_nombre: str, nombr
                     ops.append(op)
                     nuevos.append(m['nombre'])
                 if modo == 'sincronizar':
-                    fuera = [o.get('name') for o in ops if _normalizar_nombre(o.get('name', '')) not in codigo_claves]
-                    destino['operations'] = [o for o in ops if _normalizar_nombre(o.get('name', '')) in codigo_claves]
+                    fuera = [o.get('name') for o in ops if _clave_exacta(o.get('name', '')) not in codigo_claves]
                     if fuera:
-                        mets_quitados[nom] = fuera
+                        sin_codigo.setdefault(nombre_modelo, {})['metodos'] = fuera
                 if not destino['operations']:
                     del destino['operations']
                 if nuevos:
-                    mets_agregados[nom] = nuevos
+                    mets_agregados[nombre_modelo] = nuevos
 
     vistas_creadas, sin_vista = [], []
-    if nombre_diagrama:
+    if dg is not None:
         doc.reindex()
-        dg = doc.diagram(nombre_diagrama)
         # se colocan debajo de todo lo que ya esta dibujado, en filas de 4, sin encimarse
         cajas = [v for v in dg.get('ownedViews', []) if isinstance(v.get('top'), (int, float)) and isinstance(v.get('height'), (int, float))]
         y = max((v['top'] + v['height'] for v in cajas), default=20) + 60
         x, alto_fila, col = 60, 0, 0
         for nom in creadas:
-            el = next((o for o in doc.ids.values() if o and o.get('_type') in tipos_modelo and o.get('name') == nom
-                       and doc.parent.get(o['_id']) == pk['_id']), None)
+            el = next((o for o in pk.get('ownedElements', []) if o.get('_type') in tipos_modelo and o.get('name') == nom), None)
             if not el or el['_type'] == 'UMLEnumeration' or doc.views_of(el['_id'], dg):
                 if el and el['_type'] == 'UMLEnumeration':
                     sin_vista.append(nom)
@@ -1818,10 +2304,20 @@ def importar_codigo_a_diagrama(doc, ruta_codigo: str, paquete_nombre: str, nombr
             if col == 4:
                 x, y, col, alto_fila = 60, y + alto_fila + 60, 0, 0
 
-    return {
-        'paquete': paquete_nombre, 'diagrama': nombre_diagrama, 'total_clases_codigo': len(clases_codigo),
-        'clases_creadas': creadas, 'clases_actualizadas': actualizadas, 'clases_ambiguas': ambiguas, 'modo': modo,
-        'atributos_agregados': attrs_agregados, 'atributos_quitados': attrs_quitados,
-        'metodos_agregados': mets_agregados, 'metodos_quitados': mets_quitados,
+    res = {
+        'paquete': pk.get('name', paquete_nombre), 'diagrama': nombre_diagrama, 'total_clases_codigo': len(clases_codigo),
+        'clases_creadas': creadas, 'clases_actualizadas': actualizadas, 'modo': modo,
+        'atributos_agregados': attrs_agregados, 'metodos_agregados': mets_agregados,
         'metodos_omitidos_por_robustez': mets_omitidos, 'vistas_creadas': vistas_creadas,
         'enumeraciones_sin_vista': sin_vista}
+    if lits_agregados:
+        res['literales_agregados'] = lits_agregados
+    if modo == 'sincronizar':
+        res['tipos_cambiados'] = tipos_cambiados
+        res['en_modelo_sin_codigo'] = sin_codigo
+        res['nota'] = ('Nada se quito: los atributos y metodos de en_modelo_sin_codigo ya no estan en el codigo; '
+                       'si sobran, quitalos con mdj_atributos o mdj_borrar.')
+    if _repetidas(clases_codigo):
+        res['clases_repetidas_en_codigo'] = _repetidas(clases_codigo)
+        res['nota_repetidas'] = 'Esas clases se llaman igual en varios archivos del codigo; se importo solo la primera.'
+    return res

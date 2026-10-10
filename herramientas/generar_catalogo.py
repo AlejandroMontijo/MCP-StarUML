@@ -4,7 +4,6 @@
 # asi que el catalogo siempre coincide con lo que la herramienta hace.
 #
 # Uso: python herramientas/generar_catalogo.py
-import json
 import os
 import sys
 

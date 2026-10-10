@@ -27,17 +27,35 @@ VISTA_RELACION = {'UMLGeneralization': 'UMLGeneralizationView', 'UMLInterfaceRea
 # Lectura del programa
 # ---------------------------------------------------------------------------
 
+def _paquete_de_archivo(info, rel):
+    """Paquete de la clase dentro del programa. Java, Kotlin y C# lo declaran (package, namespace). En Python el modulo
+    es el paquete (app/ventas/modelos.py -> app.ventas.modelos); en TypeScript/JavaScript, si no hay namespace, y en Go
+    cuenta la carpeta (en Go todos los archivos de una carpeta son un paquete y 'package' solo da el nombre corto)."""
+    lang = info.get('lenguaje')
+    partes = [p for p in rel.replace('\\', '/').split('/') if p not in ('', '.')]
+    carpetas = partes[:-1]
+    archivo = os.path.splitext(partes[-1])[0] if partes else ''
+    if lang == 'python':
+        return '.'.join(carpetas + ([] if archivo == '__init__' else [archivo]))
+    if lang == 'typescript':
+        return info.get('paquete') or '.'.join(carpetas)
+    if lang == 'go':
+        return '.'.join(carpetas) or info.get('paquete') or ''
+    return info.get('paquete') or ''
+
+
 def leer_programa(ruta, lenguaje='java', incluir_pruebas=False):
-    """Clases del programa por nombre calificado (paquete.Nombre). A diferencia de escanear_codigo no se pierden las
-    que se llaman igual en paquetes distintos. Sin incluir_pruebas se omiten las carpetas y archivos de pruebas."""
+    """Clases del programa por nombre calificado (paquete.Nombre, y paquete.Externa.Nombre para una anidada). A
+    diferencia de escanear_codigo no se pierden las que se llaman igual en paquetes, modulos o clases distintas; las
+    partes de una partial class de C# se juntan. Sin incluir_pruebas se omiten las carpetas y archivos de pruebas."""
     ruta = os.path.abspath(os.path.expanduser(ruta))
     if lenguaje != 'auto' and lenguaje not in C._EXTENSIONES:
         raise MdjError(f'Lenguaje no soportado: {lenguaje}. Validos: auto, {", ".join(C._EXTENSIONES)}')
     exts = tuple(C._LENGUAJE_DE) if lenguaje == 'auto' else C._EXTENSIONES[lenguaje]
     if os.path.isfile(ruta):
-        archivos = [ruta]
+        archivos, base = [ruta], os.path.dirname(ruta)
     elif os.path.isdir(ruta):
-        archivos = []
+        archivos, base = [], ruta
         for raiz, dirs, files in os.walk(ruta):
             dirs[:] = sorted(d for d in dirs if d not in C._NO_ESCANEAR and not d.endswith('.egg-info')
                              and (incluir_pruebas or d not in _DIRS_PRUEBAS))
@@ -48,40 +66,234 @@ def leer_programa(ruta, lenguaje='java', incluir_pruebas=False):
         raise MdjError(f'La ruta de codigo no existe: {ruta}')
     clases, repetidas = {}, []
     for a in archivos:
-        for nom, info in C.CodeParser.parse_archivo(a, lenguaje).items():
-            q = f'{info["paquete"]}.{nom}' if info.get('paquete') else nom
-            if q in clases:
+        rel = os.path.relpath(a, base)
+        for info in C.CodeParser.parse_archivo(a, lenguaje).values():
+            info['paquete'] = _paquete_de_archivo(info, rel)
+            info['archivo_relativo'] = rel
+            q = '.'.join(p for p in (info['paquete'], info.get('externa'), info['nombre']) if p)
+            repetidas += [q] * len(info.get('repetida_en', []))  # la misma clase dos veces en un archivo
+            previa = clases.get(q)
+            if previa is None:
+                info['q'] = q
+                clases[q] = info
+            elif C._misma_parcial(previa, info):
+                C._juntar_partes(previa, info)
+            else:
                 repetidas.append(q)
-                continue
-            clases[q] = info
     return clases, repetidas
 
 
+_NOMBRE = re.compile(r'[^\W\d][\w$]*(?:\.[^\W\d][\w$]*)*')
+
+
+def _modulo_python(ruta, info):
+    """Modulo al que apunta un import de Python, tambien relativo (.modelos, ..comun), visto desde el archivo de info."""
+    nivel = len(ruta) - len(ruta.lstrip('.'))
+    resto = ruta[nivel:]
+    if not nivel:
+        return resto
+    partes = (info.get('paquete') or '').split('.') if info.get('paquete') else []
+    if os.path.splitext(os.path.basename(info.get('archivo_relativo') or ''))[0] != '__init__':
+        partes = partes[:-1]  # el paquete que contiene al modulo
+    partes = partes[:max(0, len(partes) - (nivel - 1))]
+    return '.'.join(partes + ([resto] if resto else []))
+
+
+def _carpetas_ts(ruta, info):
+    """Paquetes (carpetas) donde puede estar lo que importa './user' o '../modelos' (un archivo o una carpeta con index)."""
+    if not ruta.startswith('.'):
+        return []  # una biblioteca: no es del programa
+    destino = os.path.normpath(os.path.join(os.path.dirname(info.get('archivo_relativo') or ''), ruta)).replace('\\', '/')
+    if destino.startswith('..'):
+        return []
+    partes = [p for p in destino.split('/') if p not in ('', '.')]
+    return ['.'.join(partes[:-1]), '.'.join(partes)]
+
+
 class _Resolutor:
-    """Nombre de tipo del codigo -> clase del programa (nombre calificado), prefiriendo la del mismo paquete."""
+    """Nombre de un tipo en el codigo -> clase del programa (nombre calificado). Busca, en este orden: el nombre ya
+    calificado, las clases anidadas de la clase que lo usa (y de sus externas), lo que se importa con ese nombre, el
+    mismo paquete, los imports con comodin (using de C#), los modulos importados, los namespace que la contienen y,
+    al final, la unica clase del programa (de primer nivel) que se llame asi. Si sigue habiendo varias no elige: lo
+    anota en ambiguos y no se crea la relacion."""
 
     def __init__(self, clases):
         self.clases = clases
         self.por_nombre = {}
         for q, info in clases.items():
             self.por_nombre.setdefault(info['nombre'], []).append(q)
+        self.paquetes = {info.get('paquete') or '' for info in clases.values()}
+        self.contextos, self.ambiguos = {}, {}
 
-    def __call__(self, nombre, paquete):
+    def _paquete_go(self, ruta):
+        """Paquete del programa al que apunta un import de Go ('github.com/x/app/ventas/models' -> 'ventas.models')."""
+        punteada = '.'.join(p for p in ruta.split('/') if p)
+        cands = [p for p in self.paquetes if p and (punteada == p or punteada.endswith('.' + p))]
+        return max(cands, key=len) if cands else None
+
+    def _contexto(self, desde):
+        """Lo que la clase ve por sus imports: {'alias': {nombre: [clases]}, 'comodines': [paquetes], 'modulos': {alias:
+        paquete}}. Un alias sin clases (import de una biblioteca) decide igual: ese nombre no es del programa."""
+        if desde in self.contextos:
+            return self.contextos[desde]
+        info = self.clases[desde]
+        lang = info.get('lenguaje')
+        ctx = {'alias': {}, 'comodines': [], 'modulos': {}}
+        for imp in info.get('imports', []):
+            tipo, ruta, alias = imp.get('tipo'), imp.get('ruta') or '', imp.get('alias')
+            if lang == 'python':
+                mod = _modulo_python(ruta, info)
+                if tipo == 'clase':
+                    destino = f'{mod}.{imp["nombre"]}' if mod else imp['nombre']
+                    ctx['alias'].setdefault(alias, []).append(destino)
+                    ctx['modulos'][alias] = destino  # from paquete import modulo
+                elif tipo == 'paquete':
+                    ctx['comodines'].append(mod)
+                else:
+                    ctx['modulos'][alias] = ruta
+            elif lang == 'typescript':
+                carpetas = _carpetas_ts(ruta, info)
+                if tipo == 'clase':
+                    ctx['alias'].setdefault(alias, []).extend(f'{c}.{imp["nombre"]}' if c else imp['nombre'] for c in carpetas)
+                elif tipo == 'modulo' and carpetas:
+                    ctx['modulos'][alias] = carpetas[0]
+            elif lang == 'go':
+                pk = self._paquete_go(ruta)
+                if pk:
+                    ctx['modulos'][alias] = pk
+            elif tipo == 'clase':
+                ctx['alias'].setdefault(alias, []).append(ruta)
+            elif tipo == 'paquete':
+                ctx['comodines'].append(ruta)
+            elif tipo == 'modulo':
+                ctx['modulos'][alias] = ruta
+        self.contextos[desde] = ctx
+        return ctx
+
+    def _existe(self, q, lang):
+        """q si es una clase del programa. En Python y Go el import puede venir desde una carpeta de mas arriba de la
+        que se leyo (app.ventas.modelos.Estado leyendo app/): se prueba tambien sin los primeros paquetes."""
+        if q in self.clases:
+            return q
+        if lang in ('python', 'go'):
+            partes = q.split('.')
+            for i in range(1, len(partes) - 1):
+                if '.'.join(partes[i:]) in self.clases:
+                    return '.'.join(partes[i:])
+        return None
+
+    def __call__(self, nombre, desde=None):
+        nombre = (nombre or '').strip()
+        if not _NOMBRE.fullmatch(nombre):
+            return None
         if nombre in self.clases:
             return nombre
-        cands = self.por_nombre.get(nombre.split('.')[-1], [])
-        if len(cands) > 1:
-            cands = [q for q in cands if self.clases[q].get('paquete') == paquete] or sorted(cands)
-        return cands[0] if cands else None
+        info = self.clases.get(desde) or {}
+        pk, lang = info.get('paquete') or '', info.get('lenguaje')
+        ctx = self._contexto(desde) if desde in self.clases else {'alias': {}, 'comodines': [], 'modulos': {}}
+        primero, _, resto = nombre.partition('.')
+        alcance = desde or ''
+        while alcance and alcance != pk:  # anidadas de la clase y de sus externas
+            if f'{alcance}.{nombre}' in self.clases:
+                return f'{alcance}.{nombre}'
+            alcance = alcance.rpartition('.')[0]
+        if primero in ctx['alias']:  # lo importado con ese nombre manda, aunque no sea del programa
+            for c in ctx['alias'][primero]:
+                q = self._existe(c + ('.' + resto if resto else ''), lang)
+                if q:
+                    return q
+            return None
+        q = f'{pk}.{nombre}' if pk else nombre
+        if q in self.clases:
+            return q
+        for w in ctx['comodines']:
+            q = self._existe(f'{w}.{nombre}' if w else nombre, lang)
+            if q:
+                return q
+        if resto and primero in ctx['modulos']:
+            return self._existe(f"{ctx['modulos'][primero]}.{resto}", lang)
+        if lang in ('csharp', 'typescript'):  # los namespace que contienen a la clase tambien se ven
+            partes = pk.split('.') if pk else []
+            while partes:
+                partes.pop()
+                q = '.'.join(partes + [nombre])
+                if q in self.clases:
+                    return q
+        if resto:
+            return None  # calificado con algo que no es del programa (java.util.Date): no se adivina
+        cands = self.por_nombre.get(nombre, [])
+        if len(cands) > 1:  # una anidada casi nunca se nombra sin su externa desde fuera
+            cands = [c for c in cands if not self.clases[c].get('externa')] or cands
+        if len(cands) == 1:
+            return cands[0]
+        if cands and desde:
+            self.ambiguos.setdefault(desde, {})[nombre] = sorted(cands)
+        return None
 
-    def en_tipo(self, tipo, paquete):
-        """Clases del programa que aparecen en un tipo (normalizado), en orden: List<Pedido> -> [Pedido]."""
+    def en_tipo(self, tipo, desde, original=None):
+        """Clases del programa que aparecen en un tipo, en orden: List<Pedido> -> [Pedido]."""
         out = []
-        for n in re.findall(r'[^\W\d][\w$.]*', tipo or ''):
-            q = self(n, paquete) if n not in _NO_CLASES else None
+        for n in _NOMBRE.findall(original or tipo or ''):
+            q = self(n, desde) if n not in _NO_CLASES else None
             if q and q not in out:
                 out.append(q)
         return out
+
+
+def _arbol_tipo(t, lang=''):
+    """(base, [argumentos], opcional) de un tipo tal como esta escrito: List<Pedido>, Optional[Equipo], Pedido[],
+    Cliente?, Cliente | None, []*Pedido y map[string]*Pedido de Go..."""
+    t = (t or '').strip().replace('"', '').replace("'", '')
+    t = re.sub(r'^(final|const|readonly)\s+', '', t)
+    if lang == 'go':
+        while t.startswith('*'):
+            t = t[1:].strip()
+        if t.startswith('...'):
+            return 'List', [_arbol_tipo(t[3:], lang)], False
+        m = re.match(r'\[[^\]]*\]\s*(.+)$', t)
+        if m:
+            return 'List', [_arbol_tipo(m.group(1), lang)], False
+        if t.startswith('map['):
+            k = C._cerrar_par(t, 3, '[', ']')
+            return 'Map', [_arbol_tipo(t[4:k], lang), _arbol_tipo(t[k + 1:], lang)], False
+        return t, [], False
+    opcional = t.endswith('?')
+    if t.endswith(('?', '!')):
+        t = t[:-1].strip()
+    partes = C._dividir(t, '|')
+    if len(partes) > 1:
+        utiles = [p for p in partes if p not in ('None', 'null', 'undefined')]
+        if len(utiles) != 1:
+            return '', [], True  # union de varios tipos: no hay un solo destino
+        base, args, _ = _arbol_tipo(utiles[0], lang)
+        return base, args, True
+    if t.endswith('[]'):
+        return 'List', [_arbol_tipo(t[:-2], lang)], opcional
+    if t.endswith('...'):
+        return 'List', [_arbol_tipo(t[:-3], lang)], opcional
+    m = re.fullmatch(r'([\w$.]+)\s*[<\[]\s*(.*?)\s*[>\]]', t, re.S)
+    if m:
+        return m.group(1), [_arbol_tipo(x, lang) for x in C._dividir(m.group(2), ',')], opcional
+    return t, [], opcional
+
+
+def _destino_campo(tipo, lang, es_clase, opcional=False):
+    """(nombre de la clase destino tal como esta escrito, multiplicidad) de un campo, o None si no es una asociacion.
+    Una coleccion o un mapa apuntan a su elemento (0..*) y un opcional a su contenido (0..1); cualquier otro generico
+    del programa (Repositorio<Pedido, Long>) es la asociacion con esa clase, no con su argumento."""
+    def visitar(nodo, mult):
+        base, args, opc = nodo
+        if opc and mult == '1':
+            mult = '0..1'
+        clase = base.split('.')[-1].lower()
+        if clase in C._LISTAS or clase in C._SETS:
+            return visitar(args[0], '0..*') if len(args) == 1 else None
+        if clase in C._MAPAS:
+            return (visitar(args[1], '0..*') or visitar(args[0], '0..*')) if len(args) == 2 else None
+        if clase in C._OPCIONALES:
+            return visitar(args[0], '0..1' if mult == '1' else mult) if len(args) == 1 else None
+        return (base, mult) if base and es_clase(base) else None
+    return visitar(_arbol_tipo(tipo, lang), '0..1' if opcional else '1')
 
 
 # ---------------------------------------------------------------------------
@@ -108,12 +320,22 @@ def _es_accesor(m, campos):
     return False
 
 
-def _tipo(doc_tipo, original, resolver, paquete, elems):
-    """Tipo de un atributo o parametro: referencia a la clase del programa si es exactamente una, si no el texto."""
-    if doc_tipo and doc_tipo not in ('Object',) and re.fullmatch(r'[^\W\d][\w$.]*', doc_tipo):
-        q = resolver(doc_tipo, paquete) if doc_tipo not in _NO_CLASES else None
-        if q in elems:
-            return ref(elems[q]['_id'])
+def _tipo(doc_tipo, original, resolver, desde, elems, lang=''):
+    """Tipo de un atributo o parametro: referencia a la clase del programa si es exactamente una, si no el texto.
+    Se resuelve con el tipo como esta escrito (calificado o importado); con el normalizado solo si el escrito no es
+    un nombre simple (Pedido? de Kotlin, Optional[Pedido] de Python)."""
+    escrito = (original or '').strip()
+    if lang == 'go':
+        escrito = escrito.lstrip('*').strip()
+    if _NOMBRE.fullmatch(escrito):
+        nombre = escrito
+    elif doc_tipo and _NOMBRE.fullmatch(doc_tipo) and doc_tipo not in _NO_CLASES:
+        nombre = doc_tipo
+    else:
+        nombre = None
+    q = resolver(nombre, desde) if nombre else None
+    if q in elems:
+        return ref(elems[q]['_id'])
     texto = (original or doc_tipo or '').strip()
     return '' if texto in ('Object', 'var') else texto
 
@@ -135,20 +357,24 @@ def construir(doc, clases, raiz_nombre, op):
         return paquetes[nombre]
 
     elems = {}
-    for q in sorted(clases):
+    # primero las de primer nivel y luego las anidadas, que van dentro de su clase externa (como en StarUML)
+    for q in sorted(clases, key=lambda q: (len((clases[q].get('externa') or '').split('.')) if clases[q].get('externa') else 0, q)):
         info = clases[q]
         tipo = {'interface': 'UMLInterface', 'enum': 'UMLEnumeration'}.get(info.get('tipo_decl'), 'UMLClass')
-        pk = paquete(info.get('paquete') or '')
-        el = {'_type': tipo, '_id': doc.new_id(), '_parent': ref(pk['_id']), 'name': info['nombre']}
+        pkn = info.get('paquete') or ''
+        externa = info.get('externa')
+        duenio = elems.get(f'{pkn}.{externa}' if pkn else externa) if externa else None
+        duenio = duenio or paquete(pkn)
+        el = {'_type': tipo, '_id': doc.new_id(), '_parent': ref(duenio['_id']), 'name': info['nombre']}
         if info.get('abstracta'):
             el['isAbstract'] = True
-        pk.setdefault('ownedElements', []).append(el)
+        duenio.setdefault('ownedElements', []).append(el)
         elems[q] = el
     resolver = _Resolutor(clases)
 
     candidatas = []  # asociaciones que salen de campos: (origen, destino, rol, multiplicidad)
     for q, info in clases.items():
-        el, pkq = elems[q], info.get('paquete') or ''
+        el, lang = elems[q], info.get('lenguaje')
         if el['_type'] == 'UMLEnumeration' and info.get('literales'):
             el['literals'] = [{'_type': 'UMLEnumerationLiteral', '_id': doc.new_id(), '_parent': ref(el['_id']), 'name': l}
                               for l in info['literales']]
@@ -156,10 +382,11 @@ def construir(doc, clases, raiz_nombre, op):
         for a in info.get('atributos', []):
             # los campos de instancia son asociaciones; las constantes y campos static (en una interfaz de Java
             # todos lo son) quedan como atributos
-            estatico = a.get('estatico') or (info.get('tipo_decl') == 'interface' and info.get('lenguaje') == 'java')
-            destinos = resolver.en_tipo(a.get('tipo'), pkq) if op['asociaciones'] and not estatico else []
-            if destinos:
-                candidatas.append((q, destinos[-1], a['nombre'], '0..*' if C._es_coleccion_tipo(a['tipo']) else '1'))
+            estatico = a.get('estatico') or (info.get('tipo_decl') == 'interface' and lang == 'java')
+            destino = _destino_campo(a.get('tipo_original') or a.get('tipo'), lang, lambda n: resolver(n, q) is not None,
+                                     a.get('opcional')) if op['asociaciones'] and not estatico else None
+            if destino:
+                candidatas.append((q, resolver(destino[0], q), a['nombre'], destino[1]))
                 continue
             if not op['atributos'] or (op['solo_publicos'] and a.get('visibilidad') != 'public'):
                 continue
@@ -170,7 +397,7 @@ def construir(doc, clases, raiz_nombre, op):
                 at['isStatic'] = True
             if a.get('final'):
                 at['isReadOnly'] = True
-            t = _tipo(a.get('tipo'), a.get('tipo_original'), resolver, pkq, elems)
+            t = _tipo(a.get('tipo'), a.get('tipo_original'), resolver, q, elems, lang)
             if t:
                 at['type'] = t
             attrs.append(at)
@@ -191,16 +418,16 @@ def construir(doc, clases, raiz_nombre, op):
                     o['isStatic'] = True
                 if m.get('abstracto'):
                     o['isAbstract'] = True
-                params = []
+                params, originales = [], m.get('tipos_originales') or {}
                 for p in m.get('parametros', []):
                     pa = {'_type': 'UMLParameter', '_id': doc.new_id(), '_parent': ref(o['_id']), 'name': p['nombre']}
-                    t = _tipo(p.get('tipo'), p.get('tipo_original'), resolver, pkq, elems)
+                    t = _tipo(p.get('tipo'), p.get('tipo_original') or originales.get(p['nombre']), resolver, q, elems, lang)
                     if t:
                         pa['type'] = t
                     params.append(pa)
                 if m.get('retorno') not in ('void', None):
                     pa = {'_type': 'UMLParameter', '_id': doc.new_id(), '_parent': ref(o['_id']), 'direction': 'return'}
-                    t = _tipo(m.get('retorno'), m.get('retorno_original'), resolver, pkq, elems)
+                    t = _tipo(m.get('retorno'), m.get('retorno_original'), resolver, q, elems, lang)
                     if t:
                         pa['type'] = t
                     params.append(pa)
@@ -222,7 +449,7 @@ def construir(doc, clases, raiz_nombre, op):
     for q, info in clases.items():
         es_interfaz = elems[q]['_type'] == 'UMLInterface'
         for base in info.get('superclases', []) + info.get('interfaces', []):
-            t = resolver(base, info.get('paquete') or '')
+            t = resolver(info.get('bases_calificadas', {}).get(base, base), q)
             if not t or t == q:
                 externas.setdefault(info['nombre'], []).append(base)
                 continue
@@ -255,14 +482,20 @@ def construir(doc, clases, raiz_nombre, op):
         for q, info in clases.items():
             usados = []
             for m in info.get('metodos', []):
-                for t in [m.get('retorno')] + [p.get('tipo') for p in m.get('parametros', [])]:
-                    usados += [d for d in resolver.en_tipo(t, info.get('paquete') or '') if d != q and d not in usados]
+                originales = m.get('tipos_originales') or {}
+                tipos = [(m.get('retorno'), m.get('retorno_original'))] + \
+                    [(p.get('tipo'), p.get('tipo_original') or originales.get(p['nombre'])) for p in m.get('parametros', [])]
+                for t, original in tipos:
+                    usados += [d for d in resolver.en_tipo(t, q, original) if d != q and d not in usados]
             for d in usados:
                 if frozenset((q, d)) not in unidos:
                     relacion('UMLDependency', q, d)
                     unidos.add(frozenset((q, d)))
     doc.reindex()
-    return {'raiz': raiz, 'paquetes': paquetes, 'elementos': elems, 'relaciones': relaciones, 'herencia_externa': externas}
+    ambiguos = sorted(f'{clases[d]["nombre"]}: {n} ({", ".join(cands)})' for d, porn in resolver.ambiguos.items()
+                      for n, cands in porn.items())
+    return {'raiz': raiz, 'paquetes': paquetes, 'elementos': elems, 'relaciones': relaciones, 'herencia_externa': externas,
+            'tipos_ambiguos': ambiguos}
 
 
 # ---------------------------------------------------------------------------
@@ -292,18 +525,18 @@ def textos(doc, el):
     return attrs, ops, lits
 
 
-def medir(doc, el, op, espacio=None):
+def medir(doc, el, op, espacio=None, de=None):
     """(ancho, alto) de la caja: generosos, porque StarUML agranda una caja chica pero no achica una grande.
     Con espacio (el paquete de una clase de otro paquete, que se dibuja como contexto) la caja es compacta: solo el
-    nombre y "(from paquete)"."""
+    nombre y "(from paquete)". Con de (la clase externa de una anidada) la caja completa lleva "(from Externa)"."""
     estereotipo = {'UMLInterface': '«interface»', 'UMLEnumeration': '«enumeration»'}.get(el['_type'])
     if espacio is not None:
         ancho = max(M.ancho13(el.get('name', '')) * 1.12, M.ancho13(f'(from {espacio})'), M.ancho13(estereotipo or '')) + 26
         return max(110, round(ancho)), 27 + 15 + (15 if estereotipo else 0)
     attrs, ops, lits = textos(doc, el)
-    lineas = attrs + ops + lits + ([estereotipo] if estereotipo else [])
+    lineas = attrs + ops + lits + ([estereotipo] if estereotipo else []) + ([f'(from {de})'] if de else [])
     ancho = max([M.ancho13(el.get('name', '')) * 1.12] + [M.ancho13(t) for t in lineas]) + 26
-    alto = 27 + (15 if estereotipo else 0)
+    alto = 27 + (15 if estereotipo else 0) + (15 if de else 0)
     for items, visible in _compartimentos(el, attrs, ops, lits, op):
         if visible:
             alto += 15 * len(items) + 10
@@ -321,20 +554,22 @@ def _compartimentos(el, attrs, ops, lits, op):
     return out
 
 
-def vista_clasificador(doc, dg, el, x, y, ancho, alto, op, espacio=None):
+def vista_clasificador(doc, dg, el, x, y, ancho, alto, op, espacio=None, de=None):
     """Vista de clase, interfaz o enumeracion en notacion de etiqueta, con todos sus compartimentos. Con espacio es
-    la caja compacta de una clase de otro paquete: sin miembros y con "(from paquete)"."""
+    la caja compacta de una clase de otro paquete: sin miembros y con "(from paquete)". Con de (clase anidada) la
+    caja es completa y lleva "(from Externa)" para distinguirla de otra anidada que se llame igual."""
     compacta = espacio is not None
+    desde = espacio if compacta else de
     attrs, ops, lits = ([], [], []) if compacta else textos(doc, el)
     vid, ncid = doc.new_id(), doc.new_id()
     labs = [doc.new_id() for _ in range(4)]
     estereotipo = {'UMLInterface': '«interface»', 'UMLEnumeration': '«enumeration»'}.get(el['_type'])
-    alto_nombre = 27 + (15 if estereotipo else 0) + (15 if compacta else 0)
+    alto_nombre = 27 + (15 if estereotipo else 0) + (15 if desde else 0)
     top_nombre = y + 7 + (15 if estereotipo else 0)
     ns = {'_type': 'LabelView', '_id': labs[2], '_parent': ref(ncid), 'font': 'Arial;13;0', 'parentStyle': True,
           'left': x + 5, 'top': top_nombre + 15, 'width': ancho - 9, 'height': 13}
-    if compacta:
-        ns['text'] = f'(from {espacio})'
+    if desde:
+        ns['text'] = f'(from {desde})'
     else:
         ns['visible'] = False
     et = {'_type': 'LabelView', '_id': labs[0], '_parent': ref(ncid), 'font': 'Arial;13;0', 'parentStyle': True,
@@ -390,7 +625,7 @@ def vista_clasificador(doc, dg, el, x, y, ancho, alto, op, espacio=None):
     v = {'_type': VISTA_DE[el['_type']], '_id': vid, '_parent': ref(dg['_id']), 'model': ref(el['_id']), 'subViews': subs,
          'font': 'Arial;13;0', 'parentStyle': False, 'containerChangeable': True,
          'left': x, 'top': y, 'width': ancho, 'height': alto, 'stereotypeDisplay': 'label', 'nameCompartment': ref(ncid)}
-    if compacta:
+    if desde:
         v['showNamespace'] = True
     if campos['attributeCompartment'].get('visible', True) is False:
         v['suppressAttributes'] = True
@@ -771,7 +1006,22 @@ def dibujar(doc, dg, elementos, relaciones, op, contexto=None):
     principales = {el['_id'] for el in elementos}
     elementos = list(elementos) + [doc.ids[i] for i in sorted(contexto, key=lambda i: doc.name_of(i))]
     ids = {el['_id'] for el in elementos}
-    tam = {el['_id']: medir(doc, el, op, contexto.get(el['_id'])) for el in elementos}
+    # "(from ...)" en la caja de una clase anidada (su clase externa) y en las que se llaman igual que otra del
+    # diagrama (su paquete en el programa), para distinguirlas
+    externa = {}
+    nombres = [el.get('name') for el in elementos if el['_id'] not in contexto]
+    for el in elementos:
+        padre = doc.ids.get(doc.parent.get(el['_id']))
+        if padre and padre.get('_type') in VISTA_DE:
+            externa[el['_id']] = padre.get('name', '')
+        elif padre and el['_id'] not in contexto and nombres.count(el.get('name')) > 1:
+            ruta = []
+            while padre and padre.get('_type') == 'UMLPackage' and doc.ids.get(doc.parent.get(padre['_id']), {}).get('_type') == 'UMLPackage':
+                ruta.insert(0, padre.get('name', ''))
+                padre = doc.ids.get(doc.parent.get(padre['_id']))
+            if ruta:
+                externa[el['_id']] = '.'.join(ruta)
+    tam = {el['_id']: medir(doc, el, op, contexto.get(el['_id']), externa.get(el['_id'])) for el in elementos}
     rels, aristas = [], []
     for rel, _, _ in relaciones:
         if rel['_type'] == 'UMLAssociation':
@@ -788,7 +1038,8 @@ def dibujar(doc, dg, elementos, relaciones, op, contexto=None):
     vistas = {}
     for el in elementos:
         x, y = posiciones[el['_id']]
-        vistas[el['_id']] = vista_clasificador(doc, dg, el, x, y, *tam[el['_id']], op, contexto.get(el['_id']))
+        vistas[el['_id']] = vista_clasificador(doc, dg, el, x, y, *tam[el['_id']], op, contexto.get(el['_id']),
+                                               externa.get(el['_id']))
     cajas = {n: _caja(v) for n, v in vistas.items()}
     medios_de = rutas(cajas, geometrias)
     sentido = {frozenset(par): par for geo in geometrias for par in list(geo['cadenas']) + geo['mismas']}
@@ -813,6 +1064,14 @@ def dibujar(doc, dg, elementos, relaciones, op, contexto=None):
                     if not _cruces(pts, otras):
                         medios = prueba
                         break
+        elif o == d and 0 < k < 4:  # otro lazo en la misma caja (Nodo izq, Nodo der): en otra esquina, sin encimarse
+            l, t, w, h = (vistas[o][c] for c in ('left', 'top', 'width', 'height'))
+            prueba = [[(l + w + 30, t + h * 3 / 4), (l + w + 30, t + h + 30), (l + w * 3 / 4, t + h + 30)],
+                      [(l + w / 4, t + h + 30), (l - 30, t + h + 30), (l - 30, t + h * 3 / 4)],
+                      [(l - 30, t + h / 4), (l - 30, t - 30), (l + w / 4, t - 30)]][k - 1]
+            otras = [c for n, c in cajas.items() if n != o]
+            if min(min(p) for p in prueba) >= 0 and not _cruces(_puntos({'points': M.ruta(vistas[o], vistas[d], prueba)}), otras):
+                medios = [(round(x), round(y)) for x, y in prueba]
         if rel['_type'] == 'UMLAssociation':
             v = M.vista_asociacion(doc, dg, rel, vistas[o], vistas[d], medios)
         else:
@@ -894,6 +1153,10 @@ def programa_a_diagrama(doc, ruta_codigo, lenguaje='java', paquete=None, diagram
             'clases': cuenta.get('UMLClass', 0), 'interfaces': cuenta.get('UMLInterface', 0),
             'enumeraciones': cuenta.get('UMLEnumeration', 0),
             'paquetes_del_programa': sorted(k for k in hecho['paquetes'] if k),
+            'paquetes_con_clases': sorted({p for p in paquete_de.values() if p}),
             'asociaciones': rels.get('UMLAssociation', 0), 'generalizaciones': rels.get('UMLGeneralization', 0),
             'realizaciones': rels.get('UMLInterfaceRealization', 0), 'dependencias': rels.get('UMLDependency', 0),
-            'herencia_externa': hecho['herencia_externa'], 'clases_repetidas_omitidas': repetidas}
+            'herencia_externa': hecho['herencia_externa'], 'clases_repetidas_omitidas': repetidas,
+            **({'tipos_ambiguos': hecho['tipos_ambiguos'],
+                'nota_ambiguos': 'Esos tipos corresponden a varias clases del programa y no se pudo saber cual por sus '
+                                 'imports: quedaron como atributo, sin asociacion.'} if hecho['tipos_ambiguos'] else {})}

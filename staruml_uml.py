@@ -302,6 +302,17 @@ def instanciar(doc, p, marcadores, dx=0, dy=0):
     objetos = copy.deepcopy(p['objetos'])
     for e in objetos:
         renum(e['objeto'])
+    # cada objeto va en un campo que su contenedor tiene (si el diagrama esta donde StarUML no lo pondria, p. ej. un
+    # diagrama de secuencia suelto en el modelo, la lifeline no tendria interaccion donde guardarse)
+    tipos_nuevos = {e['objeto']['_id']: e['objeto']['_type'] for e in objetos}
+    for e in objetos:
+        if e['padre'].startswith('@ext:'):
+            continue
+        pid = resolver(e['padre'])
+        pt = tipos_nuevos.get(e['padre']) or (doc.ids.get(pid) or {}).get('_type')
+        if pt in metamodelo()['tipos'] and atributo(pt, e['campo']) is None:
+            raise MdjError(f'{e["objeto"]["_type"]} iria en {doc.name_of(pid)} ({pt}), que no tiene el campo '
+                           f'{e["campo"]}. El diagrama no esta donde StarUML lo pondria: crealo con mdj_diagrama_crear')
     for e in objetos:
         fix(e['objeto'])
         if dx or dy:
@@ -318,17 +329,21 @@ def instanciar(doc, p, marcadores, dx=0, dy=0):
 
 def _renombrar(doc, nuevos, p, nombre):
     """Pone el nombre al elemento principal y a las etiquetas de sus vistas que mostraban el nombre de la plantilla.
-    Si es una linea que crea otro elemento con nombre por omision (la clase de una clase asociacion), ese tambien
-    toma el nombre: en UML son el mismo elemento."""
+    Si es una linea que crea otro elemento con nombre por omision (la clase de una clase asociacion, el objeto de un
+    objeto de enlace), ese toma el nombre: en UML son el mismo elemento y es el nombre que StarUML muestra. Si el
+    elemento principal de esa linea no tiene nombre en StarUML (el enlace de la clase asociacion o del objeto de
+    enlace), solo lo lleva el otro."""
     mid = nuevos.get(p.get('modelo'))
     if not mid or not nombre:
         return
     cambiar = [doc.get(mid)]
     if p['forma'] == 'line':
-        cambiar += [doc.ids[i] for i in nuevos.values() if doc.ids.get(i) is not None and i != mid
-                    and not doc.ids[i].get('_type', '').endswith('View')
-                    and re.fullmatch(r'[A-Za-z]+\d+', str(doc.ids[i].get('name') or ''))
-                    and es_subtipo(doc.ids[i]['_type'], 'UMLClassifier')]
+        otros = [doc.ids[i] for i in nuevos.values() if doc.ids.get(i) is not None and i != mid
+                 and not doc.ids[i].get('_type', '').endswith('View')
+                 and re.fullmatch(r'[A-Za-z]+\d+', str(doc.ids[i].get('name') or ''))
+                 and (es_subtipo(doc.ids[i]['_type'], 'UMLClassifier') or es_subtipo(doc.ids[i]['_type'], 'UMLInstance'))]
+        raiz = next((e['objeto'] for e in p['objetos'] if e['objeto'].get('_id') == p.get('modelo')), {})
+        cambiar = otros if otros and 'name' not in raiz else cambiar + otros
     for el in cambiar:
         viejo = el.get('name')
         el['name'] = nombre
@@ -338,6 +353,138 @@ def _renombrar(doc, nuevos, p, nombre):
             o = doc.ids.get(i)
             if o and o.get('_type', '').endswith('View') and isinstance(o.get('text'), str) and viejo in o['text']:
                 o['text'] = o['text'].replace(viejo, nombre)
+
+
+# simbolos cuyo nombre StarUML no dibuja: nodos de control, pseudoestados, contencion, extremos de mensaje, marcas de
+# tiempo y varios de wireframe, flowchart y BPMN (comprobado exportando cada simbolo de cada paleta con StarUML 6.3.1).
+# El nombre queda solo en el modelo y dibujar lo avisa.
+SIN_NOMBRE_VISIBLE = {
+    'UMLInitialNode', 'UMLActivityFinalNode', 'UMLFlowFinalNode', 'UMLDecisionNode', 'UMLMergeNode', 'UMLForkNode',
+    'UMLJoinNode', 'UMLInterruptibleActivityRegion', 'UMLInitialState', 'UMLFinalState', 'UMLChoice', 'UMLJunction',
+    'UMLFork', 'UMLJoin', 'UMLDeepHistory', 'UMLShallowHistory', 'UMLEntryPoint', 'UMLExitPoint', 'UMLTerminate',
+    'UMLContainment', 'UMLEndpoint', 'UMLGate', 'UMLTimeSegment', 'UMLTimeTick', 'BPMNGroup', 'BPMNMessageLink',
+    'BPMNAssociation', 'BPMNConversationLink', 'BPMNDataAssociation',
+    'FCCollate', 'FCOr', 'FCSort', 'FCSummingJunction', 'MMEdge', 'WFAvatar', 'WFFrame', 'WFDesktopFrame',
+    'WFMobileFrame', 'WFWebFrame', 'WFImage', 'WFPanel', 'WFSeparator', 'WFSlider', 'WFSwitch', 'WFTabList'}
+
+
+def _sin_llaves(texto):
+    t = str(texto).strip()
+    return t[1:-1].strip() if t.startswith('{') and t.endswith('}') else t
+
+
+def _interaccion_llamada(doc, nombre, excluir):
+    """La interaccion con ese nombre, si hay exactamente una (fuera de las de excluir)."""
+    c = [o for o in doc.ids.values() if o and o.get('_type') == 'UMLInteraction' and o.get('name') == nombre
+         and o['_id'] not in excluir]
+    return c[0] if len(c) == 1 else None
+
+
+def _textos_nuevos(doc, nuevos, viejo, nuevo):
+    """Cambia el texto de las etiquetas recien creadas (StarUML las recalcula al abrir; asi el archivo ya coincide)."""
+    for i in nuevos.values():
+        o = doc.ids.get(i)
+        if o and o.get('_type', '').endswith('View') and isinstance(o.get('text'), str) and o['text'] == viejo:
+            o['text'] = nuevo
+            if o.get('visible') is False:
+                o['visible'] = True
+
+
+def _etiqueta_de(doc, nuevos, campo, texto):
+    """Pone el texto en la etiqueta (nameLabel, descriptionLabel...) de las vistas nuevas que la tienen."""
+    for i in nuevos.values():
+        o = doc.ids.get(i)
+        lab = doc.ids.get((o or {}).get(campo, {}).get('$ref')) if _es_ref((o or {}).get(campo)) else None
+        if lab is not None:
+            lab['text'] = texto
+            if lab.get('visible') is False:
+                lab['visible'] = True
+
+
+def _quitar(doc, o):
+    """Saca el objeto de la lista de su padre (por identidad: otro objeto podria ser igual)."""
+    padre = doc.ids.get(doc.parent.get(o['_id']))
+    for v in (padre or {}).values():
+        if isinstance(v, list):
+            i = next((k for k, x in enumerate(v) if x is o), None)
+            if i is not None:
+                del v[i]
+                break
+
+
+def _nombre_visible(doc, nuevos, p, clave, nombre, dg):
+    """Pone el texto donde StarUML lo muestra cuando no es el nombre del elemento: el rango {min..max} de las
+    restricciones de tiempo y duracion, el {invariante}, el texto de una anotacion BPMN, la descripcion de una
+    relacion C4, la interaccion a la que se refiere un uso de interaccion (ref X) o la que muestra una accion de la
+    vista general de interaccion. Devuelve avisos de lo que no se vera."""
+    if nombre is None or nombre == '':
+        return []
+    etiqueta, ident = clave.split('|')
+    mid = nuevos.get(p.get('modelo'))
+    m = doc.ids.get(mid) if mid else None
+    if p['vista'] == 'UMLFrameView' and m is None:
+        mod = doc.ids.get(doc.parent.get(dg['_id'])) if p.get('modelo') == '@dueno' else None
+        return [f'{etiqueta} muestra el nombre del elemento al que pertenece el diagrama'
+                + (f' ({mod.get("name") or mod["_type"]})' if mod else '') + f', no "{nombre}"']
+    if ident in SIN_NOMBRE_VISIBLE or m is None:
+        return [f'StarUML no muestra el nombre de {etiqueta}: "{nombre}" queda solo en el modelo']
+    t, avisos = m['_type'], []
+    if es_subtipo(t, 'UMLIntervalConstraint'):
+        texto = _sin_llaves(nombre)
+        if '..' in texto:
+            m['min'], m['max'] = (x.strip() for x in texto.split('..', 1))
+        else:
+            m['min'] = m['max'] = texto
+            avisos.append(f'StarUML muestra {etiqueta} como {{min..max}}: quedo {{{texto}..{texto}}}; para un rango '
+                          f'usa "a..b"')
+        _textos_nuevos(doc, nuevos, '{min..max}', f'{{{m["min"]}..{m["max"]}}}')
+    elif es_subtipo(t, 'UMLStateInvariant'):
+        m['invariant'] = _sin_llaves(nombre)
+        _textos_nuevos(doc, nuevos, '{}', f'{{{m["invariant"]}}}')
+    elif es_subtipo(t, 'BPMNTextAnnotation'):
+        m['text'] = nombre
+    elif es_subtipo(t, 'C4Relationship'):
+        m['description'] = nombre
+        _etiqueta_de(doc, nuevos, 'descriptionLabel', nombre)
+    elif es_subtipo(t, 'UMLInteractionUse') and not _es_ref(m.get('refersTo')):
+        # StarUML muestra "ref" y el nombre de la interaccion a la que se refiere: la que ya se llama asi o una nueva
+        propias = {i for i in cadena(doc, dg['_id']).values()}
+        inter = _interaccion_llamada(doc, nombre, propias)
+        if inter is None:
+            dueno = doc.ids.get(doc.parent.get(dg['_parent']['$ref'])) or doc.ids.get(dg['_parent']['$ref'])
+            if dueno is None or campo_para(dueno['_type'], 'UMLInteraction') is None:
+                return [f'{etiqueta} muestra el nombre de la interaccion a la que se refiere (refersTo), que no tiene']
+            inter = crear_elemento(doc, 'UMLInteraction', nombre, dueno['_id'])
+            avisos.append(f'se creo la interaccion "{nombre}" (vacia) para que {etiqueta} la muestre: ref {nombre}')
+        m['refersTo'] = ref(inter['_id'])
+        _etiqueta_de(doc, nuevos, 'nameLabel', inter['name'])
+    elif es_subtipo(t, 'UMLAction') and _es_ref(m.get('target')):
+        # vista general de interaccion: la accion muestra la interaccion de su uso de interaccion o de su diagrama
+        destino = doc.ids.get(m['target']['$ref'])
+        nueva = None
+        if destino is not None and es_subtipo(destino['_type'], 'UMLInteractionUse') and _es_ref(destino.get('refersTo')):
+            nueva = doc.ids.get(destino['refersTo']['$ref'])
+        elif destino is not None and es_subtipo(destino['_type'], 'Diagram'):
+            nueva = doc.ids.get(doc.parent.get(destino['_id']))
+        if nueva is None or nueva['_id'] not in nuevos.values():
+            return avisos
+        propias = set(cadena(doc, dg['_id']).values()) | {nueva['_id']}
+        inter = _interaccion_llamada(doc, nombre, propias)
+        sd = next((x for x in (inter or {}).get('ownedElements', []) if x.get('_type') == 'UMLSequenceDiagram'), None)
+        if inter is not None and es_subtipo(destino['_type'], 'UMLInteractionUse'):
+            destino['refersTo'] = ref(inter['_id'])
+            _quitar(doc, nueva)
+        elif inter is not None and sd is not None:
+            m['target'] = ref(sd['_id'])
+            _quitar(doc, nueva)
+        else:
+            nueva['name'] = nombre
+            for x in nueva.get('ownedElements', []):
+                if es_subtipo(x.get('_type', ''), 'Diagram'):
+                    x['name'] = nombre
+        _etiqueta_de(doc, nuevos, 'nameLabel', nombre)
+        doc.reindex()
+    return avisos
 
 
 # ---------------------------------------------------------------------------
@@ -430,32 +577,89 @@ def _figura(v):
     return dict(v) if abajo else None
 
 
+def _zona_nombre(v):
+    """Rectangulo (x0, y0, x1, y1) del nombre que StarUML pone debajo de una figura (evento, compuerta, objeto de
+    datos...), con el ancho del texto que lleva; None si el nombre no va abajo."""
+    if not _es_caja(v) or v.get('stereotypeDisplay') == 'icon':
+        return None
+    labs = [x for x in v.get('subViews', []) if x.get('_type') == 'NodeLabelView' and x.get('visible') is not False
+            and _es_caja(x) and x['top'] >= v['top'] + v['height'] - 2]
+    if not labs:
+        return None
+    cx = v['left'] + v['width'] / 2
+    ancho = max(M.ancho13(x['text']) if isinstance(x.get('text'), str) and x['text'] else x['width'] for x in labs)
+    return (cx - ancho / 2 - 4, v['top'] + v['height'], cx + ancho / 2 + 4, max(x['top'] + x['height'] for x in labs) + 4)
+
+
+def _nombre_abajo(p, nombre):
+    """(ancho, alto) que ocupa el nombre de un icono que lo lleva debajo (evento o compuerta BPMN...), para
+    reservarlo al acomodar; None si el simbolo no es un icono con el nombre abajo."""
+    v = next((e['objeto'] for e in p['objetos'] if e['objeto'].get('_id') == p['principal']), None)
+    z = _zona_nombre(v) if v is not None else None
+    if z is None or (round(v['width']), round(v['height'])) != _tam_natural(p, nombre):
+        return None
+    return round(M.ancho13(nombre or '') + 16), round(z[3] - v['top'] - v['height'] + 6)
+
+
 def _ruta_lateral(t, h, medios):
     """Como M.ruta, pero si un extremo lleva el nombre abajo y la linea le llega desde abajo, entra por un costado a
-    la altura de la figura (asi no cruza el nombre)."""
+    la altura de la figura, lo bastante afuera para no tocar el nombre, y baja por ese costado hasta pasar el nombre
+    (asi no lo cruza ni regresa en diagonal por debajo de la figura)."""
     medios = [tuple(m) for m in medios or ()]
     ft, fh = _figura(t), _figura(h)
     if ft is None and fh is None:
         return M.ruta(t, h, medios)
     caja_t, caja_h = ft or t, fh or h
 
-    def lateral(fig, otro_pt):
+    def en_zona(pt, zona, fig):
+        x0 = min(zona[0], fig['left']) - 6 if zona else fig['left'] - 6
+        x1 = max(zona[2], fig['left'] + fig['width']) + 6 if zona else fig['left'] + fig['width'] + 6
+        y1 = (zona[3] if zona else fig['top'] + fig['height']) + 4
+        return x0 <= pt[0] <= x1 and fig['top'] <= pt[1] <= y1
+
+    def lateral(fig, zona, otro_pt):
         cx, cy = fig['left'] + fig['width'] / 2, fig['top'] + fig['height'] / 2
         if otro_pt[1] <= fig['top'] + fig['height']:
             return None
-        lado = fig['left'] + fig['width'] + 30 if otro_pt[0] >= cx else fig['left'] - 30
+        sep = max(30, round((zona[2] - zona[0]) / 2 - fig['width'] / 2) + 12) if zona else 30
+        lado = fig['left'] + fig['width'] + sep if otro_pt[0] >= cx else fig['left'] - sep
         return (round(lado), round(cy))
-    lejos_t = medios[0] if medios else M.centro(h)
-    lejos_h = medios[-1] if medios else M.centro(t)
     if ft is not None:
-        m = lateral(ft, lejos_t)
-        if m:
-            medios = [m, (m[0], round(lejos_t[1]))] + medios if not medios else [m] + medios
+        zona = _zona_nombre(t)
+        while medios and en_zona(medios[0], zona, ft):
+            medios.pop(0)
+        lejos = medios[0] if medios else M.centro(h)
+        m = lateral(ft, zona, lejos)
+        if m and not medios and _es_caja(caja_h) and caja_h['top'] - 20 > (zona[3] if zona else m[1]) + 8:
+            # el otro extremo esta mas abajo: baja por el costado y entra a el desde arriba
+            y_mid = round(caja_h['top'] - 20)
+            medios = [m, (m[0], y_mid), (round(caja_h['left'] + caja_h['width'] / 2), y_mid)]
+        elif m:
+            medios = [m, (m[0], round(lejos[1]))] + medios
     if fh is not None:
-        m = lateral(fh, lejos_h)
+        zona = _zona_nombre(h)
+        while medios and en_zona(medios[-1], zona, fh):
+            medios.pop()
+        lejos = medios[-1] if medios else M.centro(t)
+        m = lateral(fh, zona, lejos)
         if m:
-            medios = medios + ([(m[0], round(lejos_h[1])), m] if len(medios) == 0 or medios[-1][0] != m[0] else [m])
-    return M.ruta(caja_t, caja_h, medios)
+            medios = medios + ([(m[0], round(lejos[1]))] if not medios or medios[-1][0] != m[0] else []) + [m]
+    return M.ruta(caja_t, caja_h, _sin_colineales(medios))
+
+
+def _sin_colineales(pts):
+    """Quita puntos repetidos y los intermedios de tramos en la misma recta horizontal o vertical (tambien los que
+    harian ir y regresar sobre la misma linea)."""
+    res = []
+    for q in pts:
+        q = (round(q[0]), round(q[1]))
+        if res and q == res[-1]:
+            continue
+        if len(res) >= 2 and (res[-2][0] == res[-1][0] == q[0] or res[-2][1] == res[-1][1] == q[1]):
+            res[-1] = q
+            continue
+        res.append(q)
+    return res
 
 
 def _rutear(doc, nuevos, principal, medios=()):
@@ -496,6 +700,9 @@ def _separar_nombre(doc, v, nombre):
     nombre = nombre or (m.get('name') if m else None)
     ancho_n = M.ancho13('+' + nombre) if nombre else 0
     lab = doc.ids.get((v.get('nameLabel') or {}).get('$ref'))
+    if lab is None and m and nombre and m.get('description') == nombre:
+        # una relacion C4 muestra la descripcion en lugar del nombre
+        lab = doc.ids.get((v.get('descriptionLabel') or {}).get('$ref'))
     if lab and nombre:
         lab['distance'] = max(lab.get('distance') or 15, round(ancho_n / 2 + 10))
     est = doc.ids.get((v.get('stereotypeLabel') or {}).get('$ref'))
@@ -535,17 +742,25 @@ def _es_caja(v):
     return v is not None and all(isinstance(v.get(k), (int, float)) for k in ('left', 'top', 'width', 'height'))
 
 
-def _ajustar(v, tipo_vista):
+def _ajustar(v, tipo_vista, otro=None):
     """La vista donde StarUML engancha el simbolo: la dada o, si la plantilla espera otro tipo, una subvista suya de
-    ese tipo (un mensaje se engancha a la linea punteada de la lifeline, no a la caja)."""
+    ese tipo (un mensaje se engancha a la linea punteada de la lifeline, no a la caja). Si no tiene ninguna de ese
+    tipo pero si del tipo del otro extremo de la plantilla, esa: la plantilla del mensaje llega a un endpoint, y entre
+    dos lifelines llega a la linea punteada de la de destino (en la caja, StarUML lo corta en su borde y no muestra la
+    activacion)."""
     if v is None or not tipo_vista or v['_type'] == tipo_vista:
         return v
-    pila = list(v.get('subViews', []))
-    while pila:
-        s = pila.pop(0)
-        if s.get('_type') == tipo_vista:
-            return s
-        pila.extend(s.get('subViews', []))
+    for t in (tipo_vista, otro):
+        if not t:
+            continue
+        if v['_type'] == t:
+            return v
+        pila = list(v.get('subViews', []))
+        while pila:
+            s = pila.pop(0)
+            if s.get('_type') == t:
+                return s
+            pila.extend(s.get('subViews', []))
     return v
 
 
@@ -574,6 +789,7 @@ def dibujar(doc, diagrama, simbolo, nombre=None, x=None, y=None, ancho=None, alt
     estado dentro de region, pin sobre accion, lifeline dentro del marco de tiempos...). Lineas: 'desde' y 'hasta'."""
     dg = doc.diagram(diagrama)
     clave, p = plantilla_simbolo(dg['_type'], simbolo)
+    y_pedida = y
     marc = dict(cadena(doc, dg['_parent']['$ref']), **{'@diagrama': dg['_id']})
     vc = vh = None
     usa_cola, usa_cabeza = necesita(p)
@@ -583,8 +799,8 @@ def dibujar(doc, diagrama, simbolo, nombre=None, x=None, y=None, ancho=None, alt
         falta = [n for n, usa, v in (('desde', usa_cola, desde), ('hasta', usa_cabeza, hasta)) if usa and v is None]
         if falta:
             raise MdjError(f'{etiqueta} es una linea: indica {" y ".join(falta)}')
-        vc = _ajustar(_vista(doc, dg, desde), p.get('cola')) if usa_cola else None
-        vh = _ajustar(_vista(doc, dg, hasta), p.get('cabeza')) if usa_cabeza else None
+        vc = _ajustar(_vista(doc, dg, desde), p.get('cola'), p.get('cabeza')) if usa_cola else None
+        vh = _ajustar(_vista(doc, dg, hasta), p.get('cabeza'), p.get('cola')) if usa_cabeza else None
     elif usa_cola or usa_cabeza:
         if sobre is None:
             raise MdjError(f'{etiqueta} va sobre otra vista ({p.get("cabeza") or p.get("cola")}): indica "sobre"')
@@ -614,6 +830,7 @@ def dibujar(doc, diagrama, simbolo, nombre=None, x=None, y=None, ancho=None, alt
         dx, dy = x - x0, y - y0
     nuevos, avisos = instanciar(doc, p, marc, dx, dy)
     _renombrar(doc, nuevos, p, nombre)
+    avisos += _nombre_visible(doc, nuevos, p, clave, nombre, dg)
     v = doc.get(nuevos[p['principal']])
     if p['forma'] == 'line':
         if vc is not None:
@@ -621,6 +838,9 @@ def dibujar(doc, diagrama, simbolo, nombre=None, x=None, y=None, ancho=None, alt
         if vh is not None:
             v['head'] = ref(vh['_id'])
         _rutear(doc, nuevos, v, medios)
+        if v.get('_type') == 'UMLSeqMessageView' and (vc is not None or vh is not None):
+            # un mensaje de secuencia es horizontal: a la altura pedida (y) o debajo del ultimo del diagrama
+            _mensaje_en(doc, v, round(y_pedida) if y_pedida is not None else _debajo_de_los_mensajes(dg, v))
         _acomodar_lo_que_crea(doc, nuevos, v)
         _separar_nombre(doc, v, nombre)
     else:
@@ -674,19 +894,113 @@ def _emparejar(t, o, mapa):
             _emparejar(a, b, mapa)
 
 
+def _es_ref(v):
+    return isinstance(v, dict) and set(v) == {'$ref'}
+
+
+def extremos_de(el):
+    """Elementos de los extremos de una relacion: (source, target) o (end1, end2); None si no es relacion."""
+    if _es_ref(el.get('source')) or _es_ref(el.get('target')):
+        return (el.get('source') or {}).get('$ref'), (el.get('target') or {}).get('$ref')
+    e1, e2 = el.get('end1'), el.get('end2')
+    if isinstance(e1, dict) and isinstance(e2, dict):
+        return (e1.get('reference') or {}).get('$ref'), (e2.get('reference') or {}).get('$ref')
+    return None
+
+
+def _modelo_de_vista(doc, v):
+    """Elemento que representa una vista; una subvista sin modelo (la linea punteada de una lifeline) cuenta como la
+    vista que la contiene."""
+    while v is not None:
+        if _es_ref(v.get('model')):
+            return v['model']['$ref']
+        pid = doc.parent.get(v['_id'])
+        v = doc.ids.get(pid) if pid and (doc.ids.get(pid) or {}).get('_type', '').endswith('View') else None
+    return None
+
+
+def _campo_en_padre(doc, el):
+    padre = doc.ids.get(doc.parent.get(el['_id'])) or {}
+    return next((k for k, v in padre.items() if v is el or (isinstance(v, list) and any(x is el for x in v))), None)
+
+
+def _vista_del_modelo(doc, dg, mid, que):
+    """La vista de un elemento en el diagrama, para usarla como extremo o como base de otra vista."""
+    vs = [v for _, v in doc.views_of(mid, dg)]
+    if not vs:
+        raise MdjError(f'{doc.name_of(mid)} no esta dibujado en {dg.get("name")}: dibujalo primero (o indica {que})')
+    if len(vs) > 1:
+        raise MdjError(f'{doc.name_of(mid)} tiene {len(vs)} vistas en {dg.get("name")}: indica {que} con el id de una')
+    return vs[0]
+
+
+# lo que no distingue a un simbolo de otro del mismo tipo
+_NO_DISTINGUE = {'_id', '_parent', '_type', 'name', 'ownedElements', 'documentation', 'source', 'target', 'tags'}
+
+
+def _parecido(el, raiz, claves, tipos_pl, doc):
+    """Que tanto se parece el elemento a lo que crea la plantilla en lo que distingue a los simbolos de un mismo tipo:
+    kind, messageSort, regiones de un estado, a que apunta (target de una accion), extremos de una asociacion..."""
+    s = 0
+    for k in claves:
+        tv, ev = raiz.get(k), el.get(k)
+        if isinstance(tv, list) or isinstance(ev, list):
+            tn, en = len(tv or []), len(ev or [])
+            s += (1 + (tn == en)) if tn and en else (-2 if tn else (-1 if en else 0))
+        elif _es_ref(tv) or _es_ref(ev):
+            if _es_ref(tv) and _es_ref(ev):
+                t_pl = tipos_pl.get(tv['$ref'])
+                t_el = (doc.ids.get(ev['$ref']) or {}).get('_type')
+                s += 1 if not t_pl or not t_el else (2 if es_subtipo(t_el, t_pl) else -3)
+            else:
+                s -= 2 if _es_ref(tv) else 1
+        elif isinstance(tv, dict) or isinstance(ev, dict):
+            for kk, vv in (tv or {}).items():
+                if not kk.startswith('_') and not isinstance(vv, (dict, list)):
+                    s += 1 if (ev or {}).get(kk) == vv else -1
+        elif tv is not None or ev is not None:
+            s += 2 if tv == ev else -2
+    return s
+
+
+def _tipos_plantilla(p):
+    res = {}
+
+    def walk(o):
+        if isinstance(o, dict):
+            if isinstance(o.get('_id'), str) and isinstance(o.get('_type'), str):
+                res[o['_id']] = o['_type']
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+    walk([e['objeto'] for e in p['objetos']])
+    return res
+
+
 def vista_de(doc, diagrama, elemento, x=None, y=None, ancho=None, alto=None, desde=None, hasta=None, medios=()):
     """Dibuja en el diagrama un elemento que ya existe (cualquier tipo con simbolo en la paleta del diagrama):
-    se usan solo las vistas de la plantilla de su tipo, apuntando al elemento existente."""
+    se usan solo las vistas de la plantilla de su tipo, apuntando al elemento existente. Entre los simbolos de su tipo
+    se elige el que corresponde al elemento (Simple State o Composite State, Transition o Self Transition, Message o
+    Async Message...). Una relacion se dibuja entre las vistas de sus extremos: desde y hasta son opcionales y, si se
+    dan, deben ser vistas de esos extremos. Lo que va sobre otra vista (puerto, pin, invariante...) va sobre la vista
+    de su dueno."""
     dg = doc.diagram(diagrama)
     el = doc.find(elemento)
     if doc.views_of(el['_id'], dg):
         raise MdjError(f'{el.get("name") or el["_type"]} ya tiene vista en {dg.get("name")}')
-    pl = plantillas()['plantillas'].get(dg['_type'], {})
-    elegida = None
-    for clave, p in pl.items():
-        raiz = next((e['objeto'] for e in p['objetos'] if e['objeto'].get('_id') == p.get('modelo')), None)
-        if not raiz or raiz['_type'] != el['_type']:
+    nombre_el = el.get('name') or el['_type']
+    ext = extremos_de(el)
+    a_si_mismo = bool(ext and ext[0] and ext[0] == ext[1])
+    campo_el = _campo_en_padre(doc, el)
+    vistas_el = {v['_type'] for _, v in doc.views_of(el['_id'])}
+    cands = []
+    for orden, (clave, p) in enumerate(plantillas()['plantillas'].get(dg['_type'], {}).items()):
+        raiz_e = next((e for e in p['objetos'] if e['objeto'].get('_id') == p.get('modelo')), None)
+        if not raiz_e or raiz_e['objeto']['_type'] != el['_type']:
             continue
+        raiz = raiz_e['objeto']
         # el elemento de la plantilla y el existente se recorren juntos: sus partes (extremos de una relacion...)
         # quedan apuntando a las del existente
         mapa = {}
@@ -696,19 +1010,87 @@ def vista_de(doc, diagrama, elemento, x=None, y=None, ancho=None, alto=None, des
         sueltas = {m for e in vistas for m in _marcas(e['objeto'])} - internos - set(mapa)
         sueltas = {m for m in sueltas if not m.startswith(('@diagrama', '@dueno', '@cola', '@cabeza', '@ext:'))}
         if vistas and not sueltas:
-            elegida = (clave, dict(p, objetos=vistas), mapa)
-            break
-    if not elegida:
+            cands.append({'clave': clave, 'p': p, 'raiz': raiz, 'padre': raiz_e['padre'], 'campo': raiz_e['campo'],
+                          'mapa': mapa, 'vistas': vistas, 'orden': orden})
+    if not cands:
         raise MdjError(f'{dg["_type"]} no tiene un simbolo para dibujar un {el["_type"]} existente')
-    clave, p, mapa = elegida
+    claves = set().union(*(set(c['raiz']) for c in cands)) - _NO_DISTINGUE
+    viables, motivos = [], []
+    for c in cands:
+        p, etiqueta = c['p'], c['clave'].split('|')[0]
+        uc, uh = necesita(p)
+        # una referencia que el simbolo usa y el elemento no tiene (la accion de una vista general de interaccion
+        # apunta a una interaccion; un estado submaquina, a su maquina)
+        falta = [k for k, tv in c['raiz'].items() if k != '_parent' and _es_ref(tv) and not _es_ref(el.get(k))]
+        if falta:
+            motivos.append(f'{etiqueta} necesita {", ".join(falta)}')
+            continue
+        auto = p['forma'] != 'line' and uc and uh
+        if auto != a_si_mismo:
+            motivos.append(f'{etiqueta} es para relaciones de un elemento consigo mismo' if auto else
+                           f'{etiqueta}: {nombre_el} va de un elemento a si mismo')
+            continue
+        puntos = _parecido(el, c['raiz'], claves, _tipos_plantilla(p), doc)
+        puntos += 3 if c['campo'] == campo_el else 0
+        puntos += 4 if p['vista'] in vistas_el else 0
+        viables.append((-puntos, c['clave'].split('|')[1] != el['_type'], c['orden'], c))
+    if not viables:
+        raise MdjError(f'{dg["_type"]} no tiene un simbolo para {nombre_el} ({el["_type"]}): ' + '; '.join(motivos))
+    c = min(viables, key=lambda t: t[:3])[3]
+    clave, p, mapa = c['clave'], dict(c['p'], objetos=c['vistas']), c['mapa']
     marc = dict(cadena(doc, dg['_parent']['$ref']), **{'@diagrama': dg['_id']}, **mapa)
+    uc, uh = necesita(c['p'])
     vc = vh = None
     if p['forma'] == 'line':
-        if desde is None or hasta is None:
-            raise MdjError(f'{el["_type"]} se dibuja como linea: indica desde y hasta')
-        vc, vh = _vista(doc, dg, desde), _vista(doc, dg, hasta)
+        for que, usa, dado, tipo_v, i in (('desde', uc, desde, p.get('cola'), 0), ('hasta', uh, hasta, p.get('cabeza'), 1)):
+            if not usa:
+                continue
+            # el extremo que corresponde: el elemento de origen o destino; si la linea va sobre otra linea (mensaje
+            # de comunicacion sobre su conector), el elemento de esa linea
+            esperado = (el.get('connector') or {}).get('$ref') if tipo_v and es_linea(tipo_v) else (ext[i] if ext else None)
+            if dado is not None:
+                v = _vista(doc, dg, dado)
+                if v is None:
+                    raise MdjError(f'{que}: {dado} no esta en {dg.get("name")}')
+                if esperado and _modelo_de_vista(doc, v) != esperado:
+                    raise MdjError(f'{que} debe ser la vista de {doc.name_of(esperado)} en {dg.get("name")}: '
+                                   f'{nombre_el} {"sale de" if i == 0 else "llega a"} {doc.name_of(esperado)}, no de '
+                                   f'{doc.name_of(_modelo_de_vista(doc, v))}')
+            elif esperado:
+                v = _vista_del_modelo(doc, dg, esperado, que)
+            else:
+                raise MdjError(f'{el["_type"]} se dibuja como linea: indica {que}')
+            v = _ajustar(v, tipo_v, p.get('cabeza') if i == 0 else p.get('cola'))
+            if i == 0:
+                vc = v
+            else:
+                vh = v
         dx = dy = 0
     else:
+        if uc or uh:
+            # va sobre la vista de su dueno (puerto sobre su componente, pin sobre su accion), del elemento al que
+            # apunta (invariante sobre su lifeline) o del elemento con el que se relaciona consigo mismo
+            sobre = desde if desde is not None else hasta
+            if sobre is not None:
+                base = _vista(doc, dg, sobre)
+            else:
+                mid = ext[0] if a_si_mismo else None
+                if mid is None and c['padre'].startswith(('@cola_m', '@cabeza_m')):
+                    mid = doc.parent.get(el['_id'])
+                if mid is None:
+                    mid = next((el[k]['$ref'] for k, tv in c['raiz'].items()
+                                if _es_ref(tv) and tv['$ref'] in ('@cola_m', '@cabeza_m') and _es_ref(el.get(k))), None)
+                if mid is not None:
+                    base = _vista_del_modelo(doc, dg, mid, 'desde (la vista sobre la que va)')
+                else:
+                    tipo_b = p.get('cabeza') or p.get('cola')
+                    bases = [v for v in _todas_las_vistas(dg) if v.get('_type') == tipo_b]
+                    if len(bases) != 1:
+                        raise MdjError(f'{clave.split("|")[0]} va sobre un {tipo_b}: indica desde con esa vista')
+                    base = bases[0]
+            vc = vh = _ajustar(base, p.get('cabeza') or p.get('cola'))
+            if (x is None or y is None) and _es_caja(vh):
+                x, y = vh['left'] + 20, vh['top'] + 30
         if x is None or y is None:
             x, y = _caja_libre(dg, ancho or 150, alto or 90)
         dx, dy = x - p['origen'][0], y - p['origen'][1]
@@ -726,7 +1108,14 @@ def vista_de(doc, diagrama, elemento, x=None, y=None, ancho=None, alto=None, des
             if o and isinstance(o.get('text'), str) and viejo in o['text']:
                 o['text'] = o['text'].replace(viejo, el['name'])
     if p['forma'] == 'line':
+        if vc is not None:
+            v['tail'] = ref(vc['_id'])
+        if vh is not None:
+            v['head'] = ref(vh['_id'])
         _rutear(doc, nuevos, v, medios)
+        if v.get('_type') == 'UMLSeqMessageView':
+            # debajo del ultimo mensaje del diagrama (o a la altura pedida)
+            _mensaje_en(doc, v, round(y) if y is not None else _debajo_de_los_mensajes(dg, v))
     if ancho is not None and p['forma'] != 'line':
         v['width'] = ancho
     if alto is not None and p['forma'] != 'line':
@@ -751,6 +1140,9 @@ def _tam_natural(p, nombre):
         # StarUML escribe los nombres en negritas (~15% mas anchas que Arial normal)
         w = max(w, round(M.ancho13(nombre or '') * 1.15 + 44), 120)
         h = max(h, 60)
+    if v.get('_type') == 'C4PersonView':
+        # StarUML dibuja la cabeza (un tercio del ancho) arriba de la caja y la alarga hasta que caben sus textos
+        h = max(h, round(w / 3) + 75)
     return round(w), round(h)
 
 
@@ -766,14 +1158,19 @@ def anidar(doc, hijo_v, padre_v):
     if not hm or not pm or hm is pm:
         return
     destino, campo = pm, None
+    viejo = doc.ids[doc.parent[hm['_id']]]
     if pm.get('regions') and es_subtipo(hm['_type'], 'UMLVertex'):
         destino, campo = pm['regions'][0], 'vertices'
     else:
-        at = campo_para(pm['_type'], hm['_type'])
+        # como StarUML al cambiar de contenedor: el mismo campo que tenia (nodes, attributes...) si el nuevo dueno lo
+        # tiene; si no, el que le corresponde
+        actual = _campo_en_padre(doc, hm)
+        at = atributo(pm['_type'], actual) if actual else None
+        if not (at and at['kind'] == 'objs' and es_subtipo(hm['_type'], at['type'])):
+            at = campo_para(pm['_type'], hm['_type'])
         campo = at['name'] if at and at['kind'] == 'objs' else None
-    if not campo:
+    if not campo or viejo is destino:
         return
-    viejo = doc.ids[doc.parent[hm['_id']]]
     for k, v in viejo.items():
         if isinstance(v, list) and hm in v:
             v.remove(hm)
@@ -805,7 +1202,8 @@ def encapsula(tipo_modelo):
 def _de_borde(p):
     """Puertos, pines, nodos de expansion, puntos de entrada y salida: van sobre el borde de su contenedor."""
     v = next((e['objeto'] for e in p['objetos'] if e['objeto'].get('_id') == p['principal']), {})
-    return (v.get('width') or 99) <= 30 and (v.get('height') or 99) <= 30 or         any(x in p['vista'] for x in ('PortView', 'PinView', 'ExpansionNodeView'))
+    return ((v.get('width') or 99) <= 30 and (v.get('height') or 99) <= 30) or \
+        any(x in p['vista'] for x in ('PortView', 'PinView', 'ExpansionNodeView'))
 
 
 CARRILES = ('UMLSwimlaneView', 'BPMNLaneView', 'BPMNPoolView')
@@ -942,7 +1340,8 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
                or (el.get('dentro') is not None and str(el['dentro']) not in claves)]
     for rel in rels:
         for c in ('desde', 'hasta'):
-            if rel.get(c) is not None and str(rel[c]) not in claves and str(rel[c]) not in rclaves                     and existente(str(rel[c])) is None:
+            if rel.get(c) is not None and str(rel[c]) not in claves and str(rel[c]) not in rclaves \
+                    and existente(str(rel[c])) is None:
                 raise MdjError(f'relacion {rel["simbolo"]}: {c} "{rel[c]}" no es un elemento de la lista ni esta '
                                f'dibujado en {dg.get("name")}')
 
@@ -950,28 +1349,37 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
         r_ = el.get('dentro') if el.get('dentro') is not None else el.get('sobre')
         return claves.get(str(r_)) if r_ is not None else None
 
-    def dentro_de(el):
-        """Contenedores (por 'dentro', no 'sobre') de un elemento, del mas cercano al mas lejano."""
+    # nada puede quedar dentro (o sobre) de si mismo, ni en un ciclo de contencion: el acomodo no terminaria
+    for el in els:
+        cadena_k, x = [el['_k']], padre_de(el)
+        while x is not None:
+            if x['_k'] in cadena_k:
+                ciclo = cadena_k[cadena_k.index(x['_k']):] + [x['_k']]
+                raise MdjError('Ciclo de contencion (dentro/sobre): ' + ' -> '.join(ciclo))
+            cadena_k.append(x['_k'])
+            x = padre_de(x)
+
+    def ancestros_el(el):
+        """El elemento y sus contenedores (por dentro o sobre), del mas cercano al mas lejano."""
         res = []
-        while el is not None:
-            es_dentro = el.get('dentro') is not None
+        while el is not None and el not in res:
+            res.append(el)
             el = padre_de(el)
-            if el is not None and es_dentro:
-                res.append(el['_k'])
         return res
 
+    def dentro_de(el):
+        """Contenedores (por 'dentro', no 'sobre') de un elemento, del mas cercano al mas lejano."""
+        cad = ancestros_el(el)
+        return [c['_k'] for a_, c in zip(cad, cad[1:]) if a_.get('dentro') is not None]
+
     def raiz_de(el):
-        while padre_de(el) is not None:
-            el = padre_de(el)
-        return el
+        return ancestros_el(el)[-1]
 
     def arista(rel, miembros):
         a, b = claves.get(str(rel.get('desde'))), claves.get(str(rel.get('hasta')))
         # se sube cada extremo hasta el nivel que se esta acomodando
-        while a and a['_k'] not in miembros:
-            a = padre_de(a)
-        while b and b['_k'] not in miembros:
-            b = padre_de(b)
+        a = next((x for x in ancestros_el(a) if x['_k'] in miembros), None) if a else None
+        b = next((x for x in ancestros_el(b) if x['_k'] in miembros), None) if b else None
         if not a or not b or a is b:
             return None
         # la generalizacion va al reves y manda: la clase base arriba de sus derivadas. Las realizaciones no: StarUML
@@ -980,6 +1388,32 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
         if _invierte_capas(tipo_dg, rel.get('simbolo')):
             return (b['_k'], a['_k'], True)
         return (a['_k'], b['_k'], False)
+
+    def antes_que(rel):
+        """Relaciones que deben estar dibujadas antes: la que usa como extremo (mensaje sobre su conector) y aquella
+        sobre la que va un extremo suyo o un contenedor de este."""
+        res = []
+        for c in ('desde', 'hasta'):
+            r_ = rel.get(c)
+            if r_ is None:
+                continue
+            if str(r_) in rclaves:
+                res.append(str(r_))
+            for x in ancestros_el(claves.get(str(r_))) if str(r_) in claves else ():
+                if x.get('sobre') is not None and str(x['sobre']) in rclaves:
+                    res.append(str(x['sobre']))
+        return res
+    # se dibujan en el orden dado, salvo que una use a otra que viene despues: esa se adelanta
+    orden_rels, hechas, pend = [], set(), list(rels)
+    while pend:
+        sig = next((r for r in pend if all(k in hechas for k in antes_que(r))), None)
+        if sig is None:
+            raise MdjError('Relaciones en ciclo (cada una necesita que la otra este dibujada): ' +
+                           ', '.join(f'{r["simbolo"]} "{r["_k"]}" usa {", ".join(antes_que(r))}' for r in pend))
+        orden_rels.append(sig)
+        hechas.add(sig['_k'])
+        pend.remove(sig)
+    rels = orden_rels
 
     def bandas(lanes, x0=0, y0=0):
         """Carriles contiguos (columnas si son verticales, filas si son horizontales) del mismo largo, con todo lo de
@@ -1025,6 +1459,13 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
     def medir(el):
         """Tamano de cada elemento; los contenedores se acomodan por dentro primero (posiciones relativas)."""
         w, h = _tam_natural(el['_p'], el.get('nombre'))
+        el['_icono'] = None
+        nombre_abajo = _nombre_abajo(el['_p'], el.get('nombre'))
+        if nombre_abajo and not el['_hijos'] and not el['_sobre'] and el.get('ancho') is None and el.get('alto') is None:
+            # un icono (evento, compuerta...) con el nombre debajo: el acomodo le reserva el ancho y el alto del nombre
+            # y el icono se dibuja centrado arriba de ese espacio
+            el['_icono'] = (w, h)
+            w, h = max(w, nombre_abajo[0]), h + nombre_abajo[1]
         if el['_hijos'] and all(_es_carril(c['_p']) for c in el['_hijos']):
             # un pool con sus lanes: los lanes en bandas despues del encabezado del pool
             vert = _carril_vertical(el['_p'])
@@ -1070,25 +1511,67 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
     previas = [v for v in dg.get('ownedViews', []) if _es_caja(v) and not v.get('_type', '').endswith('FrameView')]
     y_base = max((v['top'] + v['height'] for v in previas), default=0) + (40 if previas else 0)
     geometrias = []
+    y_msj = 180
     if disposicion == 'secuencia':
-        # lifelines en fila, en el orden de la lista, tan altas como lo pidan los mensajes; lo que va pegado a una
-        # lifeline (auto-mensaje, invariante) toma su turno despues de los mensajes; lo demas (fragmentos,
-        # continuaciones, restricciones...) va en una fila debajo
+        # lifelines en fila, en el orden de la lista, a la derecha de las que ya tenga el diagrama y tan altas como lo
+        # pidan los mensajes, que van debajo del ultimo mensaje que ya tenga; lo que va pegado a una lifeline
+        # (auto-mensaje, invariante) toma su turno despues de los mensajes; lo demas (fragmentos, continuaciones,
+        # restricciones...) va en una fila debajo
         n_msj = sum(1 for r in rels if r['_p']['forma'] == 'line')
         pegados = [c for el in raices if _es_lifeline(el['_p']) for c in el['_sobre']
                    if c.get('x') is None or c.get('y') is None]
-        alto_ll = 160 + 45 * (n_msj + len(pegados))
-        x, pos = 40, {}
+        ya_ll = [v for v in dg.get('ownedViews', []) if _es_caja(v) and 'Lifeline' in v.get('_type', '')]
+        ys = [float(q.split(':')[1]) for v in dg.get('ownedViews', []) if v.get('_type') == 'UMLSeqMessageView'
+              and isinstance(v.get('points'), str) for q in v['points'].split(';')]
+        ys += [v['top'] + v['height'] for v in dg.get('ownedViews', []) if _es_caja(v)
+               and v.get('_type') in ('UMLStateInvariantView', 'UMLContinuationView')]
+        y_msj = round(max(ys)) + 45 if ys else 180
+        y_ll = min((v['top'] for v in ya_ll), default=60)
+        fondo = y_msj + 45 * (n_msj + len(pegados)) + 40
+        alto_ll = fondo - y_ll
+        x, pos = max((v['left'] + v['width'] + 50 for v in ya_ll), default=40), {}
+        # dos lifelines que se mandan un mensaje quedan separadas al menos lo que mide su nombre (con el numero que
+        # StarUML le pone) mas un margen: si no, el nombre queda sobre la activacion
+        centro = {}
+        n_ant = sum(1 for v in dg.get('ownedViews', []) if v.get('_type') == 'UMLSeqMessageView')
+        separar = []
+        for r in [r for r in rels if r['_p']['forma'] == 'line']:
+            n_ant += 1
+            if r.get('desde') is not None and r.get('hasta') is not None and str(r['desde']) != str(r['hasta']):
+                separar.append((str(r['desde']), str(r['hasta']), M.ancho13(f'{n_ant} : {r.get("nombre") or ""}') + 44))
+
+        def centro_de(k):
+            if k in centro:
+                return centro[k]
+            v = existente(k) if k not in claves else None
+            return v['left'] + v['width'] / 2 if _es_caja(v) else None
         for el in [e for e in raices if _es_lifeline(e['_p'])]:
-            pos[el['_k']] = (x, 60)
+            c = x + el['_tam'][0] / 2
+            for a_, b_, sep in separar:
+                otro = b_ if a_ == el['_k'] else (a_ if b_ == el['_k'] else None)
+                co = centro_de(otro) if otro is not None else None
+                if co is not None and co < c + 1:
+                    c = max(c, co + sep)
+            x = round(c - el['_tam'][0] / 2)
+            centro[el['_k']] = x + el['_tam'][0] / 2
+            pos[el['_k']] = (x, y_ll)
             if not el.get('alto') and 'Seq' in el['_p']['vista']:
                 el['_tam'] = (el['_tam'][0], max(el['_tam'][1], alto_ll))
             x += el['_tam'][0] + 50
+        # las lifelines que ya estaban se alargan hasta los mensajes nuevos
+        for v in ya_ll:
+            if 'Seq' in v['_type'] and v['top'] + v['height'] < fondo:
+                extra = fondo - v['top'] - v['height']
+                v['height'] += extra
+                for sv in v.get('subViews', []):
+                    if sv.get('_type') == 'UMLLinePartView' and isinstance(sv.get('height'), (int, float)):
+                        sv['height'] += extra
         for j, c in enumerate(pegados):
             ll = padre_de(c)
             c['x'] = pos[ll['_k']][0] + ll['_tam'][0] // 2 - 7
-            c['y'] = 180 + 45 * (n_msj + j)
-        x, y_otros = 40, 60 + alto_ll + 40
+            c['y'] = y_msj + 45 * (n_msj + j)
+        abajo = [v['top'] + v['height'] for v in previas if 'Lifeline' not in v.get('_type', '')]
+        x, y_otros = 40, max([fondo + 40] + [b + 40 for b in abajo])
         for el in [e for e in raices if not _es_lifeline(e['_p'])]:
             pos[el['_k']] = (x, y_otros)
             x += el['_tam'][0] + 40
@@ -1120,11 +1603,21 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
     for el in raices:
         if el.get('x') is not None and el.get('y') is not None:
             pos[el['_k']] = (el['x'], el['y'])
-    vistas = {}
+    vistas, avisos, no_visibles = {}, [], []
 
     def vista_de_ref(spec):
         spec = str(spec)
         return vistas[spec] if spec in vistas else existente(spec)
+
+    def dib(*args, **kw):
+        """dibujar, juntando sus avisos: los de nombres que StarUML no muestra aparte de los demas (una referencia de
+        la plantilla que se omitio)."""
+        r = dibujar(doc, dg['_id'], *args, **kw)
+        for a in r.get('avisos') or []:
+            lista = avisos if a.startswith('referencia a ') else no_visibles
+            if a not in lista:
+                lista.append(a)
+        return r
 
     def poner_sobre(c, v, i, n, x, y, w, h, hijos=(), dueno=None):
         """Algo pegado a otra vista: en el borde derecho repartido a lo alto (puertos, pines), o en x, y si se dio."""
@@ -1134,6 +1627,8 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
         elif dueno and c['_k'] in dueno.get('_relsobre', {}):
             rx, ry = dueno['_relsobre'][c['_k']]
             px, py = x + rx, y + ry
+        elif not _es_caja(v) and isinstance(v.get('points'), str):
+            px, py = _junto_a_linea(doc, v, c.get('nombre'), i)
         else:
             i, n = (borde.index(c), len(borde)) if c in borde else (i, n)
             arriba = 30 if h > 70 else (22 if h > 40 else 0)  # el nombre del contenedor va arriba
@@ -1152,8 +1647,8 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
                     break
         tw, th = c.get('_tam') or (c.get('ancho'), c.get('alto'))
         interior = not _de_borde(c['_p'])
-        rs = dibujar(doc, dg['_id'], c['_clave'], c.get('nombre'), px, py, tw if interior else c.get('ancho'),
-                     th if interior else c.get('alto'), sobre=v['_id'])
+        rs = dib(c['_clave'], c.get('nombre'), px, py, tw if interior else c.get('ancho'),
+                 th if interior else c.get('alto'), sobre=v['_id'])
         vv = doc.get(rs['vista'])
         vistas[c['_k']] = vv
         for j, cc in enumerate(c['_sobre']):
@@ -1161,7 +1656,11 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
                         vv.get('width', 20), vv.get('height', 20), dueno=c)
 
     def poner(el, x, y, padre_v=None):
-        r = dibujar(doc, dg['_id'], el['_clave'], el.get('nombre'), x, y, *el['_tam'])
+        if el.get('_icono'):
+            iw, ih = el['_icono']
+            r = dib(el['_clave'], el.get('nombre'), x + (el['_tam'][0] - iw) // 2, y, iw, ih)
+        else:
+            r = dib(el['_clave'], el.get('nombre'), x, y, *el['_tam'])
         v = doc.get(r['vista'])
         vistas[el['_k']] = v
         if padre_v is not None:
@@ -1178,8 +1677,9 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
     for el in sueltos:
         destino = existente(str(el.get('sobre') if el.get('sobre') is not None else el['dentro']))
         if el.get('sobre') is not None:
-            poner_sobre(el, destino, 0, 1, destino.get('left', 0), destino.get('top', 0),
-                        destino.get('width', 100), destino.get('height', 100))
+            # junto a la caja o a la linea sobre la que va (una linea no tiene left/top)
+            x, y = (destino['left'], destino['top']) if _es_caja(destino) else _centro_linea(destino)
+            poner_sobre(el, destino, 0, 1, x, y, destino.get('width', 1), destino.get('height', 1))
         else:
             medir(el)
             x = el['x'] if el.get('x') is not None else destino['left'] + PAD_X
@@ -1188,8 +1688,7 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
     cajas = {k: P._caja(vistas[k]) for k in miembros}
     medios_de = P.rutas(cajas, geometrias) if geometrias else {}
     sentido = {frozenset(par): par for geo in geometrias for par in list(geo['cadenas']) + geo['mismas']}
-    lineas, cruzan, avisos = [], [], []
-    y_msj = 180
+    lineas, cruzan = [], []
     for rel in rels:
         a, b = claves.get(str(rel.get('desde'))), claves.get(str(rel.get('hasta')))
         va = vista_de_ref(rel['desde']) if rel.get('desde') is not None else None
@@ -1201,8 +1700,7 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
                 medios = list(medios_de.get(sentido[par], []))
                 if sentido[par] != (a['_k'], b['_k']):
                     medios = medios[::-1]
-        r = dibujar(doc, dg['_id'], rel['_clave'], rel.get('nombre'), desde=va and va['_id'], hasta=vb and vb['_id'],
-                    medios=medios)
+        r = dib(rel['_clave'], rel.get('nombre'), desde=va and va['_id'], hasta=vb and vb['_id'], medios=medios)
         v = doc.get(r['vista'])
         vistas[rel['_k']] = v
         lineas.append(r['vista'])
@@ -1250,8 +1748,7 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
             x0, y0, x1, y1 = nx, ny, nx + v['width'], ny + v['height']
             m = 20
         for el in marcos:
-            r = dibujar(doc, dg['_id'], el['_clave'], el.get('nombre'), x0 - m, y0 - m - 20,
-                        x1 - x0 + 2 * m, y1 - y0 + 2 * m + 20)
+            r = dib(el['_clave'], el.get('nombre'), x0 - m, y0 - m - 20, x1 - x0 + 2 * m, y1 - y0 + 2 * m + 20)
             vistas[el['_k']] = doc.get(r['vista'])
             x0, y0, x1, y1 = x0 - m, y0 - m - 20, x1 + m, y1 + m
             m = 20
@@ -1260,12 +1757,55 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
            'vistas': {k: v['_id'] for k, v in vistas.items()}, 'lineas_que_cruzan_cajas': cruzan}
     if avisos:
         res['avisos'] = avisos
+    if no_visibles:
+        res['nombres_no_visibles'] = no_visibles
     return res
 
 
 def _centro_linea(v):
     pts = [tuple(map(float, p.split(':'))) for p in (v.get('points') or '0:0').split(';')]
     return round((pts[0][0] + pts[-1][0]) / 2), round((pts[0][1] + pts[-1][1]) / 2)
+
+
+def _x_centro(doc, v):
+    """x del centro de una vista; la de la linea punteada de una lifeline es la del centro de la lifeline (StarUML la
+    recoloca ahi al abrir el archivo)."""
+    if v is None:
+        return None
+    p = doc.ids.get(doc.parent.get(v['_id']))
+    if p is not None and 'Lifeline' in p.get('_type', '') and _es_caja(p):
+        return p['left'] + p['width'] / 2
+    return v['left'] + v['width'] / 2 if _es_caja(v) else None
+
+
+def _junto_a_linea(doc, v, texto, i=0):
+    """Donde poner lo que va pegado a una linea (la restriccion de tiempo de un mensaje): cerca de su origen, fuera de
+    la activacion, y del lado donde no va el nombre de la linea (un mensaje hacia la derecha lleva el nombre arriba;
+    hacia la izquierda, abajo), para que ni su texto ni su enlace pisen ese nombre."""
+    pts = [tuple(map(float, p.split(':'))) for p in (v.get('points') or '0:0').split(';')]
+    (x0, y0), (x1, y1) = pts[0], pts[-1]
+    alto = 16 * i
+    if len(pts) == 2 and abs(y1 - y0) < 1:
+        x0 = _x_centro(doc, doc.ids.get((v.get('tail') or {}).get('$ref'))) or x0
+        x1 = _x_centro(doc, doc.ids.get((v.get('head') or {}).get('$ref'))) or x1
+        ancho = M.ancho13(texto or '') + 16
+        derecha, izquierda = x0 + 20, x0 - 20 - ancho
+        # hacia donde va el mensaje, salvo que el texto llegue a la activacion del destino: entonces del otro lado
+        if x1 >= x0:
+            x = derecha if derecha + ancho <= x1 - 14 or izquierda < 0 else izquierda
+            return round(x), round(y0 + 8 + alto)
+        x = izquierda if izquierda >= x1 + 14 else derecha
+        return round(x), round(y0 - 22 - alto)
+    cx, cy = _centro_linea(v)
+    return cx + 12, cy + 8 + alto
+
+
+def _debajo_de_los_mensajes(dg, v=None):
+    """Altura para un mensaje nuevo: 45 px debajo del mas bajo del diagrama (180 si no hay)."""
+    ys = [float(q.split(':')[1]) for w in dg.get('ownedViews', []) if w is not v
+          and w.get('_type') == 'UMLSeqMessageView' and isinstance(w.get('points'), str)
+          for q in w['points'].split(';')]
+    return round(max(ys)) + 45 if ys else 180
 
 
 def _mensaje_en(doc, v, y):
@@ -1275,8 +1815,7 @@ def _mensaje_en(doc, v, y):
         return
     t = doc.ids.get((v.get('tail') or {}).get('$ref'))
     h = doc.ids.get((v.get('head') or {}).get('$ref'))
-    xt = t['left'] + t['width'] / 2 if _es_caja(t) else None
-    xh = h['left'] + h['width'] / 2 if _es_caja(h) else None
+    xt, xh = _x_centro(doc, t), _x_centro(doc, h)
     if xt is None and xh is None:
         return
     xt = xh - 120 if xt is None else xt
@@ -1288,6 +1827,21 @@ def _mensaje_en(doc, v, y):
             s['left'] = round(xh - (s.get('width') or 14) / 2)
             if not isinstance(s.get('height'), (int, float)) or s['height'] < 20:
                 s['height'] = 29
+    # la lifeline que crea un mensaje de creacion empieza a su altura (StarUML la baja ahi al abrir el archivo): se
+    # guarda asi, con el mismo fondo que tenia, para que lo guardado coincida con lo que se dibuja
+    m = doc.ids.get((v.get('model') or {}).get('$ref'))
+    ll = doc.ids.get(doc.parent.get(h['_id'])) if h is not None else None
+    if (m or {}).get('messageSort') == 'createMessage' and _es_caja(ll) and 'Lifeline' in ll.get('_type', ''):
+        fondo, delta = ll['top'] + ll['height'], round(y - 20) - ll['top']
+        ll['top'] += delta
+        ll['height'] = max(40, fondo - ll['top'])
+        # el encabezado y la linea punteada van con ella; lo demas que cuelga de la lifeline (invariantes de estado)
+        # tiene su propia altura
+        for sv in ll.get('subViews', []):
+            if _es_caja(sv) and sv.get('_type') in ('UMLNameCompartmentView', 'UMLLinePartView'):
+                sv['top'] += delta
+                if sv.get('_type') == 'UMLLinePartView':
+                    sv['height'] = max(1, sv['height'] - delta)
 
 
 # ---------------------------------------------------------------------------
@@ -1326,12 +1880,73 @@ def _props(doc, t, props):
     return res
 
 
+def _campos_staruml():
+    """{tipo: {campos}} donde StarUML guarda cada tipo de elemento al dibujarlo (sale de las plantillas): mensajes en
+    messages, transiciones en transitions, acciones en nodes, lifelines en participants, puertos en attributes..."""
+    if 'campos' not in _CACHE:
+        res = {}
+
+        def walk(o, campo):
+            if isinstance(o, dict):
+                if isinstance(o.get('_type'), str) and campo:
+                    res.setdefault(o['_type'], set()).add(campo)
+                for k, v in o.items():
+                    if k != '_parent' and isinstance(v, (dict, list)):
+                        walk(v, k)
+            elif isinstance(o, list):
+                for v in o:
+                    walk(v, campo)
+        pl = plantillas()
+        for p in [p for ps in pl['plantillas'].values() for p in ps.values()] + list(pl.get('diagramas', {}).values()):
+            for e in p['objetos']:
+                walk(e['objeto'], e['campo'])
+        _CACHE['campos'] = res
+    return _CACHE['campos']
+
+
+def _campo_y_dudas(padre_tipo, hijo_tipo):
+    """(campo, dudas): el campo de campo_para y, si la eleccion fue ambigua (varios campos propios igual de cercanos,
+    como entryActivities, doActivities y exitActivities de un estado), sus nombres."""
+    todos = [a for a in atributos(padre_tipo) if a['kind'] in ('objs', 'obj') and es_subtipo(hijo_tipo, a['type'])]
+    if not todos:
+        return None, []
+    usados = _campos_staruml()
+    linaje = list(ancestros(hijo_tipo))
+    propios = [a for a in todos if a['name'] != 'ownedElements' and a['type'] in linaje]
+    cands = todos
+    for i, t in enumerate(linaje):
+        if t in usados:
+            # un campo declarado para un tipo mas cercano al hijo que t manda: flowProperties para un
+            # SysMLFlowProperty, aunque StarUML guarde las SysMLProperty en parts, values...
+            if not any(linaje.index(a['type']) < i for a in propios):
+                hit = [a for a in todos if a['name'] in usados[t]]
+                if len(hit) == 1:
+                    return hit[0], []
+                cands = hit or todos
+            break
+    propios = [a for a in cands if a['name'] != 'ownedElements' and a['type'] in linaje]
+    dudas = []
+    if propios:
+        cerca = min(linaje.index(a['type']) for a in propios)
+        mejores = [a for a in propios if linaje.index(a['type']) == cerca]
+        if len(mejores) == 1:
+            return mejores[0], []
+        dudas = [a['name'] for a in mejores]
+    return next((a for a in todos if a['name'] == 'ownedElements'), todos[0]), dudas
+
+
 def campo_para(padre_tipo, hijo_tipo):
-    """Campo (objs/obj) del padre donde cabe un hijo de ese tipo; ownedElements si hay varios."""
-    cands = [a for a in atributos(padre_tipo) if a['kind'] in ('objs', 'obj') and es_subtipo(hijo_tipo, a['type'])]
-    if not cands:
-        return None
-    return next((a for a in cands if a['name'] == 'ownedElements'), cands[0])
+    """Campo (objs/obj) del padre donde va un hijo de ese tipo, como lo guarda StarUML: el que usa StarUML al dibujar
+    ese tipo (o su ancestro mas cercano), salvo que otro campo este declarado para un tipo mas cercano al hijo; si
+    StarUML no lo dibuja, el campo propio cuyo tipo declarado es el mas cercano al hijo (columnas, atributos,
+    operaciones, literales, parametros, tags). ownedElements queda como ultimo recurso y para los casos ambiguos."""
+    return _campo_y_dudas(padre_tipo, hijo_tipo)[0]
+
+
+# lo que no se crea suelto: los diagramas (mdj_diagrama_crear crea tambien su interaccion, maquina de estados...),
+# el proyecto y los extremos de una relacion (los crea mdj_relacion_crear junto con ella)
+NO_SUELTOS = (('Diagram', 'es un diagrama: se crea con mdj_diagrama_crear'), ('Project', 'es el proyecto'),
+              ('RelationshipEnd', 'es el extremo de una relacion: se crea con mdj_relacion_crear'))
 
 
 def crear_elemento(doc, t, nombre=None, dentro_de=None, campo=None, props=None):
@@ -1339,8 +1954,18 @@ def crear_elemento(doc, t, nombre=None, dentro_de=None, campo=None, props=None):
     info = tipo(t)
     if not info or info['kind'] != 'class' or not es_subtipo(t, 'Model') or es_abstracto(t):
         raise MdjError(f'{t} no es un tipo de elemento de StarUML que se pueda crear')
+    for base, motivo in NO_SUELTOS:
+        if es_subtipo(t, base):
+            raise MdjError(f'{t} {motivo}')
     padre = doc.find(dentro_de) if dentro_de else M.modelo_raiz(doc)
-    at = atributo(padre['_type'], campo) if campo else campo_para(padre['_type'], t)
+    if campo:
+        at = atributo(padre['_type'], campo)
+    else:
+        at, dudas = _campo_y_dudas(padre['_type'], t)
+        if dudas:
+            # en ownedElements quedaria en el modelo, pero StarUML no lo mostraria en ninguno de esos campos
+            raise MdjError(f'Un {t} puede ir en {", ".join(dudas[:-1])} o {dudas[-1]} de {doc.name_of(padre["_id"])} '
+                           f'({padre["_type"]}): indica cual con campo')
     if not at or at['kind'] not in ('objs', 'obj') or not es_subtipo(t, at['type']):
         raise MdjError(f'Un {t} no puede ir dentro de {padre["_type"]}' + (f' en {campo}' if campo else ''))
     el = {'_type': t, '_id': doc.new_id(), '_parent': ref(padre['_id'])}
@@ -1355,8 +1980,25 @@ def crear_elemento(doc, t, nombre=None, dentro_de=None, campo=None, props=None):
     return el
 
 
+def _dueno_de_relacion(t):
+    """(desde_el_origen, campos) donde StarUML guarda una relacion de tipo t al dibujarla: las que su plantilla cuelga
+    del elemento de origen (dependencias, asociaciones, despliegues...) van en el origen; las que cuelga del dueno del
+    diagrama (mensajes en la interaccion, transiciones en la region, flujos en la actividad, conectores en el
+    clasificador) van en el contenedor del origen. None si StarUML no dibuja ese tipo."""
+    if 'dueno_rel' not in _CACHE:
+        res = {}
+        for ps in plantillas()['plantillas'].values():
+            for p in ps.values():
+                e = next((e for e in p['objetos'] if e['objeto'].get('_id') == p.get('modelo')), None)
+                if e:
+                    res.setdefault(e['objeto']['_type'], []).append((e['padre'].startswith('@cola_m'), e['campo']))
+        _CACHE['dueno_rel'] = {k: max(set(v), key=v.count) for k, v in res.items()}
+    return next((_CACHE['dueno_rel'][a] for a in ancestros(t) if a in _CACHE['dueno_rel']), None)
+
+
 def crear_relacion(doc, t, origen, destino, nombre=None, dueno=None, props=None):
-    """Relacion de cualquier tipo entre dos elementos: dirigida (source/target) o con extremos (end1/end2)."""
+    """Relacion de cualquier tipo entre dos elementos: dirigida (source/target) o con extremos (end1/end2). Queda donde
+    StarUML la guarda al dibujarla (un mensaje en su interaccion, una transicion en su region...)."""
     info = tipo(t)
     if not info or es_abstracto(t) or not (es_subtipo(t, 'Relationship') or atributo(t, 'source')):
         raise MdjError(f'{t} no es una relacion de StarUML')
@@ -1376,22 +2018,38 @@ def crear_relacion(doc, t, origen, destino, nombre=None, dueno=None, props=None)
     else:
         raise MdjError(f'No se como conectar un {t}')
     el.update(_props(doc, t, props))
-    # dueno: el indicado, o el primero hacia arriba desde el origen que pueda contenerlo
-    cands = [doc.find(dueno)] if dueno else []
-    i = a['_id']
-    while not dueno and i:
-        cands.append(doc.ids[i])
-        i = doc.parent.get(i)
-    for c in cands:
+
+    def guardar(c, at):
+        el['_parent'] = ref(c['_id'])
+        if at['kind'] == 'objs':
+            c.setdefault(at['name'], []).append(el)
+        else:
+            c[at['name']] = el
+        doc.reindex()
+        return el
+    if dueno:
+        c = doc.find(dueno)
         at = campo_para(c['_type'], t)
+        if not at:
+            raise MdjError(f'{doc.name_of(c["_id"])} ({c["_type"]}) no puede guardar un {t}')
+        return guardar(c, at)
+    # sin dueno: el que usa StarUML (subiendo desde el origen o desde su contenedor hasta quien tenga ese campo)
+    cadena_origen = []
+    i = a['_id']
+    while i and i not in cadena_origen:
+        cadena_origen.append(i)
+        i = doc.parent.get(i)
+    regla = _dueno_de_relacion(t)
+    if regla:
+        desde_origen, campo = regla
+        for i in cadena_origen[0 if desde_origen else 1:]:
+            at = atributo(doc.ids[i]['_type'], campo)
+            if at and at['kind'] in ('objs', 'obj') and es_subtipo(t, at['type']):
+                return guardar(doc.ids[i], at)
+    for i in cadena_origen:
+        at = campo_para(doc.ids[i]['_type'], t)
         if at:
-            el['_parent'] = ref(c['_id'])
-            if at['kind'] == 'objs':
-                c.setdefault(at['name'], []).append(el)
-            else:
-                c[at['name']] = el
-            doc.reindex()
-            return el
+            return guardar(doc.ids[i], at)
     raise MdjError(f'Ningun contenedor de {doc.name_of(a["_id"])} puede guardar un {t}')
 
 
@@ -1468,6 +2126,13 @@ def _vistas_de_paleta(tipo_dg):
     return _CACHE[clave]
 
 
+# anotaciones que StarUML deja poner en cualquier diagrama (grupo Annotations de la paleta: nota, enlace de nota, texto,
+# cuadro de texto, linea libre, hipervinculo, rectangulo, rectangulo redondeado, elipse e imagen) y la restriccion
+ANOTACIONES = ('UMLNoteView', 'UMLNoteLinkView', 'UMLTextView', 'UMLTextBoxView', 'UMLConstraintView',
+               'UMLCustomNoteView', 'UMLCustomTextView', 'FreelineEdgeView', 'HyperlinkView', 'RectangleView',
+               'RoundRectView', 'EllipseView', 'ImageView')
+
+
 def validar_metamodelo(doc):
     """Avisos de lo que StarUML no esperaria: tipos desconocidos, hijos en campos que no los admiten,
     vistas que el diagrama no admite y lineas cuyos extremos no son vistas."""
@@ -1500,6 +2165,7 @@ def validar_metamodelo(doc):
         # vistas que admite el diagrama: las del metamodelo mas las que dibuja su paleta (la lista del metamodelo
         # esta incompleta en varios diagramas, p. ej. BPMN)
         permitidas = set((tipo(dg['_type']) or {}).get('views') or []) | _vistas_de_paleta(dg['_type'])
+        permitidas |= {t for t in ANOTACIONES if t in tipos}
         for v in dg.get('ownedViews', []):
             t = v.get('_type')
             if permitidas and t in tipos and not any(es_subtipo(t, p) for p in permitidas):

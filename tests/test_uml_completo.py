@@ -1,7 +1,5 @@
 # Todos los diagramas y simbolos de StarUML: tablas (metamodelo y plantillas), dibujo de cada simbolo de cada paleta,
 # elementos y relaciones guiados por el metamodelo, generacion con acomodo y anidamiento, y validacion.
-import json
-import os
 
 import pytest
 

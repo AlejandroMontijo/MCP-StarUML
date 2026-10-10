@@ -26,6 +26,16 @@ from apoyo import M, ok, tool
     ('/usr/bin/staruml ejs plantilla.ejs', False),
     ('python3 /home/u/MCP-StarUML/server.py', False),
     ('vim /home/u/staruml/notas.txt', False),
+    # el ejecutable tiene que ir primero: otro programa que solo menciona una carpeta "StarUML ..." no cuenta
+    ('python3 /home/u/StarUML MCP/server.py', False),
+    (sys.executable + ' /home/u/StarUML MCP/server.py', False),
+    ('/no/existe/Python.app/Contents/MacOS/Python /Users/x/StarUML MCP/server.py', False),
+    ('vim /Users/x/notas/staruml pendientes.txt', False),
+    ('/bin/sh -c /opt/StarUML/staruml', False),
+    ('staruml', True),
+    ('staruml image /x/m.mdj -f svg -s @Diagram', False),
+    ('/Volumes/StarUML 6.2.2-arm64/StarUML.app/Contents/MacOS/StarUML', True),
+    ('/Volumes/StarUML 6.2.2-arm64/StarUML.app/Contents/MacOS/StarUML image /x/m.mdj', False),
 ])
 def test_reconoce_la_aplicacion_de_staruml(cmd, es_gui):
     assert M.es_gui_staruml(cmd) is es_gui
@@ -47,10 +57,12 @@ def test_detecta_staruml_abierto_en_linux(modelo, tmp_path):
     # ruta larga a proposito: ps no debe recortarla
     falso = tmp_path / ('instalacion_con_un_nombre_de_carpeta_bastante_largo_' * 2) / 'opt' / 'StarUML' / 'staruml'
     falso.parent.mkdir(parents=True)
-    shutil.copy(shutil.which('sleep'), falso)
-    p = subprocess.Popen([str(falso), '30'])
+    # sleep corre desde donde esta instalado, con la ruta falsa como argv[0] (lo que muestra ps). Una copia de
+    # /bin/sleep no sirve en macOS: el sistema no deja arrancar un binario suyo fuera de su lugar y lo mata al inicio
+    p = subprocess.Popen([str(falso), '30'], executable=shutil.which('sleep'))
     try:
         time.sleep(0.3)
+        assert p.poll() is None, 'el proceso de prueba no arranco'
         assert M.staruml_gui_abierto() is True
         assert 'StarUML esta abierto' in tool('mdj_documentacion', archivo=modelo, elemento='Cuenta', texto='x')['error']
     finally:
@@ -67,7 +79,9 @@ def test_busca_staruml_y_chrome_en_el_path(tmp_path, monkeypatch):
     monkeypatch.delenv('STARUML_MCP_STARUML_BIN', raising=False)
     monkeypatch.delenv('STARUML_MCP_CHROME_BIN', raising=False)
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ.get('PATH', ''))
-    monkeypatch.setattr(os.path, 'exists', lambda p, _e=os.path.exists: _e(p) and not p.startswith(('/Applications', '/opt/StarUML', '/usr/lib/staruml')))
+    # se esconden las instalaciones de la maquina (tambien las de ~/Applications) para que gane el PATH
+    ocultas = ('/Applications', os.path.expanduser('~/Applications'), '/opt/StarUML', '/usr/lib/staruml')
+    monkeypatch.setattr(os.path, 'exists', lambda p, _e=os.path.exists: _e(p) and not p.startswith(ocultas))
     if os.name != 'nt':
         assert M.staruml_cli() == str(tmp_path / 'staruml')
         assert M.chrome_bin() in (str(tmp_path / 'chromium'), shutil.which('google-chrome'), shutil.which('chromium'))
