@@ -80,7 +80,7 @@ Las rutas relativas de `salida`, `carpeta`, `carpeta_salida` y `ruta_codigo` se 
 
 ---
 
-## Catálogo de Herramientas (39)
+## Catálogo de Herramientas (40)
 
 ### Inspección Visual y Renderizado
 | Herramienta | Descripción |
@@ -122,6 +122,7 @@ Las rutas relativas de `salida`, `carpeta`, `carpeta_salida` y `ruta_codigo` se 
 | `mdj_diagrama_crear` | Crea un diagrama vacío de cualquiera de los 28 tipos (`despliegue`, `componentes`, `estados`, `bpmn`, `erd`...) con lo que StarUML crea junto con él (interacción y marco, máquina de estados y región, actividad, modelo de datos), opcionalmente como el que abre por defecto. |
 | `mdj_dibujar` | Dibuja un símbolo de la paleta como lo haría StarUML: el elemento de modelo y su vista. Cajas en `x, y` (o en el primer lugar libre), las que van encima de otra con `sobre` (puerto, pin, región) y las líneas con `desde` y `hasta`. |
 | `mdj_diagrama_generar` | Dibuja un diagrama completo de cualquier tipo a partir de listas de elementos (con `dentro` para anidar y `sobre` para pegar puertos, pines o restricciones a una caja o a una línea) y relaciones: acomodo por capas, carriles contiguos (swimlanes, pools y lanes) con el flujo en un solo sentido, `disposicion: "secuencia"` para lifelines y mensajes, contenedores del tamaño de su contenido, marcos que envuelven el diagrama y líneas sin cruces. Avisa cuando una línea sale de un elemento anidado hacia afuera de un contenedor que encapsula (componente, clase, bloque, actividad estructurada). |
+| `mdj_robustez_generar` | Dibuja el diagrama de análisis (robustez) de un caso de uso como se acostumbra: actor a la izquierda, pantallas en columna con notas opcionales, un control y el modelo de dominio a la derecha (por capas según la navegabilidad, con flechas, multiplicidades y roles, sin líneas que crucen cajas). Crea o reusa los elementos del paquete. |
 | `mdj_elemento_crear` | Crea un elemento de cualquier tipo de StarUML sin dibujarlo, validado contra el metamodelo (contenedor y propiedades). |
 | `mdj_relacion_crear` | Crea una relación de cualquier tipo (dirigida o con extremos) entre dos elementos sin dibujarla. |
 | `mdj_renombrar` | Renombra un elemento y sincroniza automáticamente las etiquetas de todas sus vistas. |
@@ -215,7 +216,32 @@ Crea (o completa) el `.mdj` con un paquete del mismo nombre que la carpeta del p
 }
 ```
 
-### 6. Generar un Diagrama de Despliegue
+### 6. Generar el Diagrama de Análisis (Robustez) de un Caso de Uso
+```json
+{
+  "archivo": "ruta/al/modelo.mdj",
+  "diagrama": "CU-01 Analisis",
+  "paquete": "CU-01",
+  "actores": [{"nombre": "Asesor de ventas"}],
+  "pantallas": [
+    {"nombre": "PantallaCliente", "nota": "F1: identificar o registrar al cliente."},
+    {"nombre": "PantallaPedido", "nota": "F2: armar el pedido."}
+  ],
+  "control": {"nombre": "ControlGestionarPedido"},
+  "entidades": [
+    {"nombre": "Cliente", "atributos": ["nombre", "telefono"]},
+    {"nombre": "Pedido", "atributos": ["folio", "total"]},
+    {"nombre": "LineaPedido", "atributos": ["cantidad"]}
+  ],
+  "asociaciones": [
+    {"desde": "Cliente", "hasta": "Pedido", "mult_desde": "1", "mult_hacia": "0..*"},
+    {"desde": "Pedido", "hasta": "LineaPedido", "mult_desde": "1", "mult_hacia": "1..*"}
+  ]
+}
+```
+Las asociaciones se escriben en el sentido de la navegación (la flecha va de `desde` a `hasta`). Las secuencias del caso de uso salen con `mdj_secuencia_generar` sobre las mismas clases.
+
+### 7. Generar un Diagrama de Despliegue
 ```json
 {
   "archivo": "ruta/al/modelo.mdj",

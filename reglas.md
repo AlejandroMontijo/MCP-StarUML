@@ -55,6 +55,15 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
   boundaries, cuando un actor del caso de uso no tiene boundary en el paquete, cuando una boundary
   atiende a un actor que no participa en el caso de uso (la herencia entre actores cuenta) y qué
   casos de uso aún no tienen paquete.
+- Disposición del diagrama de análisis (`mdj_robustez_generar` la hace sola): actor a la izquierda,
+  las pantallas (boundary) en columna con su nota debajo o al lado, el control a su derecha y a la
+  derecha el modelo de dominio, por capas según la navegabilidad. Actor → pantalla y pantalla →
+  control son rectas con flecha; entre entidades, flecha de navegación, multiplicidad y rol en cada
+  asociación. Las líneas control → entidad no se dibujan (con `lineas_control` sí).
+- La dirección de cada asociación decide quién va arriba: escribirla en el sentido de la navegación
+  (Cliente → Pedido, no Pedido → Cliente) evita ciclos que mandan una entidad al fondo con líneas largas.
+- No usar `mdj_diagrama_generar` con Boundary, Control o Entity: sus íconos se estiran si se les da
+  tamaño, no muestran los atributos y la paleta de clases no trae actor (la herramienta lo rechaza).
 
 ## Diagramas de secuencia
 

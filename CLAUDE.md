@@ -20,12 +20,13 @@ El repositorio Git en `main` contiene exclusivamente el código fuente oficial y
 
 ```text
 MCP StarUML/
-├── server.py              # Servidor MCP central (39 herramientas registradas)
+├── server.py              # Servidor MCP central (40 herramientas registradas)
 ├── staruml_mdj.py         # Motor de lectura, manipulación JSON, validación y edición segura
 ├── staruml_render.py      # Exportación CLI de StarUML, revisión de SVG y recorte a PNG (Chrome)
 ├── staruml_compare.py     # Comparador de diagramas vs código y generador bidireccional
 ├── staruml_programa.py    # Diagrama de clases de un programa ya hecho (acomodo por capas y ruteo sin cruces)
 ├── staruml_uml.py         # Motor generico: todos los diagramas y simbolos de StarUML desde plantillas y metamodelo
+├── staruml_robustez.py    # Diagrama de analisis (robustez) con la disposicion del curso (mdj_robustez_generar)
 ├── staruml_metamodelo.json # Tabla derivada del metamodelo y las paletas del StarUML instalado (generada)
 ├── plantillas_vistas.json # Lo que StarUML crea por cada simbolo de cada paleta y por cada tipo de diagrama (generada)
 ├── uml_catalogo.md        # Catalogo de diagramas y simbolos con secciones de UML 2.5.1 (generado)
@@ -114,8 +115,31 @@ MCP StarUML/
   (`ENCAPSULAN`); `mdj_validar` hace la misma revision en cualquier diagrama (`lineas_que_salen`).
 - `svg_revisar` respeta `dominant-baseline` (StarUML usa `central` y `text-before-edge`), mide los textos girados con su
   matriz y no cuenta como linea el dibujo propio de una figura sin nada adentro.
-- `tests/test_staruml_real.py::test_staruml_dibuja_los_auto_mensajes` ya fallaba antes de este cambio (etiquetas de
-  auto-mensajes sobre activaciones en el StarUML real): la geometria de los auto-mensajes sigue pendiente.
+- Auto-mensajes en secuencias: StarUML ignora el left/top de la etiqueta y la pone con alpha/distance desde el tramo
+  vertical del lazo. `generar_secuencia` usa alpha +pi/2 y distancia de medio ancho: queda a la derecha del lazo, sin
+  tapar la activacion (`test_staruml_dibuja_los_auto_mensajes` ya pasa).
+
+## 3d. Retro de las pruebas con casos reales (2026-10-01)
+
+Hallazgos al generar a mano casos completos (pedido en linea, ferreteria CU-01) y como quedaron resueltos en la
+herramienta, para que quien la use obtenga el diagrama correcto a la primera:
+
+- Robustez con `mdj_diagrama_generar`: los iconos de boundary/control/entity se estiran si se les da tamano, no
+  muestran atributos, la paleta de clases no trae actor y el ruteo generico deja flechas sueltas. Ahora el generador
+  lo rechaza y remite a `mdj_robustez_generar` (staruml_robustez.py).
+- `mdj_robustez_generar` sigue la convencion del curso (ejemplo que dio el usuario): actor | pantallas en columna con
+  nota | control | modelo de dominio por capas segun la navegabilidad, rutas de staruml_programa (sin cruces), flechas
+  de navegacion por defecto y sin lineas control-entidad salvo `lineas_control`. Las notas buscan el primer lugar que
+  no toque las diagonales. Las etiquetas de los extremos en tramos verticales se separan de la linea.
+- La direccion de las asociaciones importa: un ciclo (Pedido -> Cliente con Cliente -> Solicitud -> ... -> Pedido)
+  manda entidades al fondo con lineas largas; escribirlas en el sentido de la navegacion (Cliente -> Pedido).
+- Una entidad con muchas asociaciones (Producto) junta sus multiplicidades: el ruteo reparte puertos, pero las
+  etiquetas de lineas que corren juntas por el mismo canal todavia pueden tocarse (unas pocas observaciones de
+  svg_revisar; pendiente en staruml_programa.rutas).
+- Clase asociacion en `mdj_diagrama_generar`: su caja se coloca en el primer lugar libre de cajas y lineas (tambien
+  la suya) y esas relaciones se dibujan al final.
+- `mdj_validar` (metamodelo) admitia solo las vistas de la paleta del diagrama: las de la paleta comun (notas, texto,
+  figuras) van en cualquier diagrama (`staruml_uml.COMUNES`).
 
 ## 4. Convenciones y Reglas Inquebrantables
 

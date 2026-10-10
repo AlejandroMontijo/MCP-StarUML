@@ -224,13 +224,14 @@ def test_staruml_dibuja_la_galeria(tmp_path, staruml):
     G.construir(lambda _h, **a: ok(tool(_h, **a)), archivo)
     r = ok(tool('staruml_exportar', archivo=archivo, carpeta=str(tmp_path / 'svg')))
     nombres = {os.path.splitext(os.path.basename(a))[0]: a for a in r['archivos']}
-    faltan = [g['nombre'] for g in G.GALERIA if g['nombre'] not in nombres]
+    faltan = [n for n in [g['nombre'] for g in G.GALERIA] + [G.ROBUSTEZ['nombre']] if n not in nombres]
     assert not faltan, f'StarUML no exporto {faltan}'
     informe, total = {}, 0
-    for g in G.GALERIA:
-        rev = ok(tool('svg_revisar', archivo=archivo, svg=nombres[g['nombre']], diagrama=g['nombre']))
-        informe[g['nombre']] = rev['problemas']
+    todos = [g['nombre'] for g in G.GALERIA] + [G.ROBUSTEZ['nombre']]
+    for n in todos:
+        rev = ok(tool('svg_revisar', archivo=archivo, svg=nombres[n], diagrama=n))
+        informe[n] = rev['problemas']
         total += rev['n_problemas']
-    guardar_para_revision(archivo, *[nombres[g['nombre']] for g in G.GALERIA], informe=informe,
+    guardar_para_revision(archivo, *[nombres[n] for n in todos], informe=informe,
                           nombre_informe='galeria_svg_revisar.json')
     assert total <= MAX_OBSERVACIONES_GALERIA, informe
