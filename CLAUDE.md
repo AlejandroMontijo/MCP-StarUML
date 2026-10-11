@@ -68,7 +68,7 @@ Imports entre módulos: relativos dentro del paquete (`from . import mdj as M`);
    - Métricas de `cu_1_FA`: **14 lifelines**, **40 mensajes**, activaciones anidadas correctas y 0 errores OOSE.
 
 3. **Nuevas Capacidades de Inspección Visual y Sincronización:**
-   - Creación de `staruml_compare.py`: parser políglota (Java, Python, TypeScript, C#) para comparar entidades, métodos, atributos, multiplicidades de asociaciones y flujo de llamadas en secuencias.
+   - Creación de `staruml_compare.py` (hoy `staruml_mcp/codigo.py`): parser políglota (Java, Python, TypeScript, C#) para comparar entidades, métodos, atributos, multiplicidades de asociaciones y flujo de llamadas en secuencias.
    - Creación de `staruml_ver_visual`: genera y entrega imágenes PNG de alta resolución en tiempo real vía MCP.
    - Creación de herramientas de generación de esqueletos e importación de código hacia el `.mdj`.
 
@@ -81,7 +81,7 @@ Imports entre módulos: relativos dentro del paquete (`from . import mdj as M`);
 
 ## 3b. Campaña de pruebas y plan de mejora (2026-09-29)
 
-- `PLAN_DE_MEJORA.md` documenta 56 bugs confirmados y su corrección; `tests/` los cubre con regresiones.
+- `PLAN_DE_MEJORA.md` (retirado del repo el 2026-10-11) documentaba 56 bugs confirmados y su corrección; en ese momento `tests/` los cubría con regresiones.
 - El guardado es transaccional: `Doc.save()` rechaza un cambio que agregue ids duplicados, referencias colgantes, `_parent` incoherente o NaN.
 - Nada se pierde en silencio: el importador de código es aditivo por defecto (`modo: "sincronizar"` explícito), el generador no sobrescribe sin `sobrescribir: true` y la regeneración de secuencias conserva las notas.
 - La detección de "StarUML abierto" cubre macOS, Linux y Windows y bloquea si no puede verificar (`forzar: true` para omitirla).
