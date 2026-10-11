@@ -99,6 +99,16 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
   número) de los mensajes entre ellas; los mensajes nuevos van debajo del último que ya
   haya y las lifelines anteriores se alargan hasta ellos. Una restricción de tiempo sobre
   un mensaje va junto a su origen, del lado contrario a su nombre.
+- `mdj_secuencia_revisar` cruza las secuencias con el modelo de clases: cada lifeline con un tipo
+  que exista; cada mensaje entre tipos distintos con una asociación, herencia, dependencia o
+  realización (aviso si la asociación solo navega al revés o no navega); los mensajes al control con
+  el nombre y los parámetros de una de sus operaciones (los `mostrarX` a una boundary no se exigen;
+  si el control no tiene operaciones, solo da un aviso) y avisa de las operaciones del control que
+  ningún mensaje usa; argumentos que no salen de ningún lado (aviso); cada reply de regreso a quien
+  llamó mientras esa llamada sigue abierta (cuando quien llamó manda otro mensaje, sus llamadas
+  anteriores ya regresaron; en un fragmento `alt` o `par`, una reply en otra rama no cuenta como
+  repetida). Con un diagrama de clases, también marca los tipos que no están dibujados en él y avisa
+  de sus clases que no salen en ninguna secuencia. Lo que ya revisa `mdj_validar` no se repite.
 
 ## Diagramas de estados y de actividades
 

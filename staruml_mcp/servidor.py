@@ -17,6 +17,7 @@ from . import codigo as C      # noqa: E402
 from . import programa as P     # noqa: E402
 from . import uml as U          # noqa: E402
 from . import robustez as RB    # noqa: E402
+from . import coherencia as CO  # noqa: E402
 
 VERSION = '2.2.0'
 PROTOCOLOS = ('2025-06-18', '2025-03-26', '2024-11-05')
@@ -85,6 +86,8 @@ def resolver_rutas(args):
     for k in ('archivo', 'archivo_a', 'archivo_b', 'svg'):
         if isinstance(a.get(k), str) and a[k]:
             a[k] = os.path.abspath(os.path.expanduser(a[k]))
+            if os.path.isdir(a[k]):
+                raise M.MdjError(f'"{k}" es una carpeta, no un archivo: {a[k]}')
     base = next((os.path.dirname(a[k]) for k in ('archivo', 'svg') if isinstance(a.get(k), str) and a[k]), None)
     for k in ('salida', 'carpeta', 'carpeta_salida', 'ruta_codigo'):
         v = a.get(k)
@@ -211,6 +214,29 @@ def t_validar(a):
     res['metamodelo'] = U.validar_metamodelo(doc)
     res['lineas_que_atraviesan_contenedores'] = U.lineas_que_salen(doc)
     return res
+
+
+@tool('mdj_secuencia_revisar', 'Revisa que las secuencias cuadren con el modelo de clases: tipo de cada lifeline, '
+      'relacion en el modelo (y su navegacion) para cada mensaje, mensajes al control que no son operaciones suyas o no '
+      'llevan sus parametros (si el control no tiene operaciones, solo da un aviso), operaciones que nadie llama, '
+      'argumentos que no salen de ningun lado y replies que no regresan a quien llamo o llegan cuando esa llamada ya '
+      'termino. Con clases, tambien contra lo dibujado en ese diagrama. No repite lo que ya revisa mdj_validar.',
+      obj({'archivo': ARCHIVO,
+           'secuencias': {'type': 'array', 'items': S(),
+                          'description': 'Nombres o ids de los diagramas de secuencia (default: todos los que tienen '
+                                         'mensajes)'},
+           'clases': S(description='Opcional: nombre o id de un diagrama de clases para revisar tambien contra lo '
+                                   'dibujado en el'),
+           'metodos': S(enum=list(CO.METODOS),
+                        description='Que mensajes deben ser operaciones del receptor. control (default): los que '
+                                    'recibe el control. todos: los que recibe cualquier clase que tenga operaciones. '
+                                    'no: no se revisa. Los mostrarX a una boundary nunca se exigen'),
+           'parametros': B(description='Avisar de argumentos que no salen de ningun lado (default true)')},
+          ['archivo']),
+      ro('Revisar secuencias contra el modelo'))
+def t_secuencia_revisar(a):
+    return CO.revisar_secuencias(M.Doc(a['archivo']), a.get('secuencias'), a.get('clases'),
+                                 a.get('metodos') or 'control', a.get('parametros', True) is not False)
 
 
 @tool('mdj_diff', 'Diferencias a nivel modelo entre dos .mdj: elementos quitados y agregados, cambios de nombre, '

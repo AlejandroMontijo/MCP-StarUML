@@ -7,7 +7,8 @@ JSON-RPC 2.0 sobre `stdio`.
 Con él se puede:
 
 - Consultar el modelo: diagramas, clases, atributos, métodos, asociaciones, mensajes de secuencia, estados y actividades.
-- Validar la integridad del archivo y las reglas de robustez (boundary, control, entity).
+- Validar la integridad del archivo, las reglas de robustez (boundary, control, entity) y que las secuencias
+  cuadren con el modelo de clases.
 - Editar sin romper el archivo: clases, atributos, asociaciones, vistas, líneas, notas y documentación.
 - Crear y dibujar diagramas de los 28 tipos que trae StarUML (UML 2.5, SysML, BPMN, ERD, C4, diagrama de flujo, DFD) con
   los símbolos de sus paletas.
@@ -72,6 +73,7 @@ En la columna **Tipo**:
 | `mdj_geometria` | lectura | Posición y tamaño de las cajas y puntos de las líneas de un diagrama. |
 | `mdj_buscar` | lectura | Busca elementos por nombre y/o tipo. |
 | `mdj_validar` | lectura | Integridad (ids duplicados, referencias colgantes, `_parent` incoherente, metamodelo) y, con `oose`, reglas de robustez. Por omisión ninguna clase de análisis lleva métodos; con `metodos: "control_getset"` el control puede tenerlos y cada entity solo `getX`/`setX`/`isX` de sus atributos. |
+| `mdj_secuencia_revisar` | lectura | Revisa que las secuencias cuadren con el modelo de clases: que cada lifeline tenga un tipo que exista, que cada mensaje tenga una relación en el modelo (y no vaya contra la navegación), que los mensajes al control sean operaciones suyas con sus parámetros (con `metodos: "todos"`, los de cualquier clase con operaciones; si el control no tiene operaciones, solo da un aviso), operaciones que nadie llama, argumentos que no salen de ningún lado y replies que no regresan a quien llamó o llegan cuando esa llamada ya terminó. Con `clases`, también lo que falta dibujado en ese diagrama y lo que no sale en ninguna secuencia. No repite lo que ya revisa `mdj_validar`. |
 | `mdj_diff` | lectura | Diferencias de modelo entre dos `.mdj`: elementos agregados y quitados, cambios de nombre, de atributos y de relaciones. |
 
 ### Exportar y ver
@@ -196,6 +198,7 @@ staruml_mcp/
   mdj.py               Lectura, edición, validación y guardado seguro del .mdj
   uml.py               Los 28 tipos de diagrama: crear, dibujar, generar y validar
   robustez.py          Diagrama de robustez
+  coherencia.py        Revisión de las secuencias contra el modelo de clases
   render.py            Exportación con el CLI de StarUML, revisión de SVG y recortes
   codigo.py            Lectura y generación de código, y comparación con el diagrama
   programa.py          Diagrama de clases de un programa ya hecho
