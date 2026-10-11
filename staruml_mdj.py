@@ -546,12 +546,13 @@ def integridad(d):
     return seen, dup, colg, mism
 
 
-def validar(doc, oose=True):
+def validar(doc, oose=True, metodos='ninguno'):
+    """metodos: que metodos admite la regla OOSE (ver reglas_oose)."""
     seen, dup, colg, mism = integridad(doc.d)
     res = {'ids': len(seen), 'duplicados': dup[:20], 'n_duplicados': len(dup), 'colgantes': colg[:20],
            'n_colgantes': len(colg), 'parent_mismatch': [m for _, m in mism[:20]], 'n_parent_mismatch': len(mism)}
     if oose:
-        res['oose'] = reglas_oose(doc)
+        res['oose'] = reglas_oose(doc, metodos)
         res['comportamiento'] = reglas_comportamiento(doc)
     return res
 
@@ -641,7 +642,32 @@ def _consistencia_casos_de_uso(doc, kinds):
     return avisos
 
 
-def reglas_oose(doc):
+METODOS_OOSE = ('ninguno', 'control_getset')
+
+
+def _no_accesores(o):
+    """Nombres de las operaciones de la clase que no son get/set/is de uno de sus propios atributos (getX, setX, isX con
+    X = el nombre del atributo con la primera letra en mayuscula). Solo se mira el nombre, no los parametros."""
+    propios = set()
+    for a in o.get('attributes') or []:
+        n = (a.get('name') or '') if isinstance(a, dict) else ''
+        if n:
+            propios.add(n[:1].upper() + n[1:])
+    res = []
+    for op in o.get('operations') or []:
+        n = (op.get('name') or '') if isinstance(op, dict) else ''
+        m = re.match(r'(?:get|set|is)(.+)$', n)
+        if not m or m.group(1) not in propios:
+            res.append(n or '(sin nombre)')
+    return res
+
+
+def reglas_oose(doc, metodos='ninguno'):
+    """Reglas de robustez. metodos: 'ninguno' (default): ninguna clase de analisis (boundary, control, entity) ni actor
+    lleva metodos; 'control_getset': el control puede tener metodos, cada entity solo get/set/is de sus propios
+    atributos y las boundary y los actores ninguno."""
+    if metodos not in METODOS_OOSE:
+        raise MdjError(f'metodos debe ser uno de {list(METODOS_OOSE)}, no {metodos!r}')
     prob, avisos = [], []
     kinds = {}
     for o in doc.ids.values():
@@ -651,8 +677,18 @@ def reglas_oose(doc):
     # las que dibuja staruml_programa_a_diagrama desde un programa) si llevan metodos
     for i, k in kinds.items():
         o = doc.ids[i]
+        nombre = o.get('name', '(sin nombre)')
         if o.get('operations') and k in ('boundary', 'control', 'entity', 'actor'):
-            prob.append(f'{o.get("name", "(sin nombre)")} ({k}) tiene metodos; en analisis no se ponen metodos')
+            if metodos == 'ninguno':
+                prob.append(f'{nombre} ({k}) tiene metodos; en analisis no se ponen metodos')
+            elif k == 'entity':
+                otros = _no_accesores(o)
+                if otros:
+                    prob.append(f'{nombre} (entity) tiene metodos que no son get/set/is de sus propios atributos: '
+                                f'{otros}')
+            elif k != 'control':
+                prob.append(f'{nombre} ({k}) tiene metodos; solo el control lleva metodos y las entity get/set de '
+                            'sus atributos')
         if k in ('boundary', 'control') and o.get('attributes'):
             prob.append(f'{o.get("name", "(sin nombre)")} ({k}) tiene atributos; boundary y control van sin atributos')
     # un control por paquete
@@ -1285,8 +1321,23 @@ def modelo_raiz(doc):
     return modelos[0]
 
 
+def nombre_libre(contenedor, nombre, tipo):
+    """Falla si el contenedor ya tiene (en ownedElements) un elemento con ese nombre y del mismo tipo, o de un tipo que
+    es subtipo del otro (un paquete y un modelo, por ejemplo): los dos solo se distinguirian por el id y buscarlos
+    por nombre daria 'ambiguo'. Una clase y un actor con el mismo nombre si pueden convivir."""
+    # un subsistema tambien hace de paquete (se puede poner algo 'dentro_de' el), aunque en el metamodelo sea componente
+    paquetes = ('UMLPackage', 'UMLModel', 'UMLSubsystem')
+    for o in contenedor.get('ownedElements', []):
+        if isinstance(o, dict) and o.get('name') == nombre and (
+                es_subtipo(o.get('_type'), tipo) or es_subtipo(tipo, o.get('_type'))
+                or (tipo in paquetes and o.get('_type') in paquetes)):
+            raise MdjError(f'Ya hay un {o["_type"]} "{nombre}" en {contenedor.get("name") or contenedor["_type"]} '
+                           f'(id {o["_id"]}): usa ese o elige otro nombre')
+
+
 def crear_paquete(doc, nombre, dentro_de=None):
     padre = doc.find(dentro_de, types=('UMLModel', 'UMLPackage', 'UMLSubsystem')) if dentro_de else modelo_raiz(doc)
+    nombre_libre(padre, nombre, 'UMLPackage')
     pk = {'_type': 'UMLPackage', '_id': doc.new_id(), '_parent': ref(padre['_id']), 'name': nombre}
     padre.setdefault('ownedElements', []).append(pk)
     doc.reindex()

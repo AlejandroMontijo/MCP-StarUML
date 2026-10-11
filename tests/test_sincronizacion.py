@@ -224,7 +224,7 @@ def test_generar_csharp_convenciones():
          'asociaciones': [{'origen': 'Orden de Compra', 'destino': 'Sesion', 'mult_destino': '0..*', 'navegable': True}]}
     src = C._generar_clase_csharp(c, {'Orden de Compra': c, 'Sesion': {'tipo': 'UMLClass'}}, C._espacio_cs('app.dominio'))
     assert 'namespace App.Dominio' in src and 'public class OrdenDeCompra' in src
-    assert 'public DateTime FechaDeEntrega { get; set; }' in src
+    assert 'public DateOnly FechaDeEntrega { get; set; }' in src  # fecha sin hora: DateOnly (.NET 6+)
     assert 'public int OrdenDeCompra_ { get; set; }' in src  # no puede llamarse como la clase
     assert 'public string Event_ { get; set; }' in src
     assert 'public HashSet<string> Etiquetas' in src and 'public Dictionary<string, double> Precios' in src
@@ -235,14 +235,64 @@ def test_generar_csharp_convenciones():
 
 # --- importar ---
 
+def vista_de(archivo, nombre):
+    doc = M.Doc(archivo)
+    return next(v for _, v in doc.views_of(doc.find('UMLClass:' + nombre)['_id']))
+
+
 def test_importar_agrega_sin_quitar(dominio, tmp_path):
-    src = fuentes(str(tmp_path / 'src'), {'Cliente.java': 'public class Cliente {\n    private String nombre;\n    private String telefono;\n}\n'})
+    # ningun modo quita atributos: 'sincronizar' solo pone el tipo del codigo y reporta lo que el codigo ya no tiene
+    doc = M.Doc(dominio)
+    next(v for _, v in doc.views_of(doc.find('UMLClass:Cliente')['_id']))['height'] = 220  # agrandada a mano
+    doc.save(backup=False)
+    alto_direccion = vista_de(dominio, 'Direccion')['height']
+    src = fuentes(str(tmp_path / 'src'), {
+        'Cliente.java': 'public class Cliente {\n    private int nombre;\n    private String telefono;\n}\n',
+        'Direccion.java': 'public class Direccion { private String calle; private String colonia; private String cp; }\n'})
     r = ok(tool('staruml_codigo_a_diagrama', archivo=dominio, ruta_codigo=src, paquete='Analisis'))
-    assert [a['name'] for a in M.Doc(dominio).find('Cliente')['attributes']] == ['nombre', 'email', 'direccion', 'telefono']
-    assert r['atributos_agregados'] == {'Cliente': ['telefono']} and r['modo'] == 'agregar'
+    cliente = M.Doc(dominio).find('UMLClass:Cliente')
+    assert [(a['name'], a['type']) for a in cliente['attributes']] == \
+        [('nombre', 'String'), ('email', 'String'), ('direccion', 'Direccion'), ('telefono', 'String')]
+    assert r['atributos_agregados'] == {'Cliente': ['telefono'], 'Direccion': ['colonia', 'cp']} and r['modo'] == 'agregar'
+    assert 'en_modelo_sin_codigo' not in r and 'tipos_cambiados' not in r
+    assert vista_de(dominio, 'Cliente')['height'] == 220  # la vista no se encoge
+    assert vista_de(dominio, 'Direccion')['height'] == max(alto_direccion, M.alto_minimo_atributos(3))  # crece si no cabe
+
     r = ok(tool('staruml_codigo_a_diagrama', archivo=dominio, ruta_codigo=src, paquete='Analisis', modo='sincronizar'))
-    assert [a['name'] for a in M.Doc(dominio).find('Cliente')['attributes']] == ['nombre', 'telefono']
-    assert r['atributos_quitados'] == {'Cliente': ['email', 'direccion']}
+    cliente = M.Doc(dominio).find('UMLClass:Cliente')
+    assert [(a['name'], a['type']) for a in cliente['attributes']] == \
+        [('nombre', 'int'), ('email', 'String'), ('direccion', 'Direccion'), ('telefono', 'String')]
+    assert r['tipos_cambiados'] == {'Cliente': ['nombre: String -> int']} and r['atributos_agregados'] == {}
+    assert r['en_modelo_sin_codigo'] == {'Cliente': {'atributos': ['email', 'direccion']}}
+    assert 'atributos_quitados' not in r
+    v = vista_de(dominio, 'Cliente')
+    textos = [s['text'] for c in v['subViews'] if c['_type'] == 'UMLAttributeCompartmentView' for s in c['subViews']]
+    assert textos[0] == '+nombre: int' and len(textos) == 4 and v['height'] == 220
+    assert ids_integros(dominio)
+
+
+def test_sincronizar_reporta_aunque_el_codigo_no_tenga_atributos_ni_metodos(dominio, tmp_path):
+    doc = M.Doc(dominio)
+    del doc.find('UMLClass:Pedido')['stereotype']  # clase comun: a una entity no se le importan metodos
+    pk = doc.find('Analisis')
+    estado = {'_type': 'UMLEnumeration', '_id': doc.new_id(), '_parent': M.ref(pk['_id']), 'name': 'Estado'}
+    estado['literals'] = [{'_type': 'UMLEnumerationLiteral', '_id': doc.new_id(), '_parent': M.ref(estado['_id']), 'name': n}
+                          for n in ('ABIERTO', 'CERRADO')]
+    pk['ownedElements'].append(estado)
+    doc.save(backup=False)
+    src = fuentes(str(tmp_path / 'src'), {'Pedido.java': 'public class Pedido {\n}\n',
+                                          'Estado.java': 'public enum Estado { ABIERTO }\n'})
+    r = ok(tool('staruml_codigo_a_diagrama', archivo=dominio, ruta_codigo=src, paquete='Analisis'))
+    assert sorted(r['clases_actualizadas']) == ['Estado', 'Pedido'] and 'en_modelo_sin_codigo' not in r
+    r = ok(tool('staruml_codigo_a_diagrama', archivo=dominio, ruta_codigo=src, paquete='Analisis', modo='sincronizar'))
+    assert r['en_modelo_sin_codigo'] == {'Pedido': {'atributos': ['total', 'items'], 'metodos': ['calcularTotal']},
+                                         'Estado': {'literales': ['CERRADO']}}
+    doc = M.Doc(dominio)
+    pedido = doc.find('UMLClass:Pedido')
+    assert [a['name'] for a in pedido['attributes']] == ['total', 'items']  # nada se quita
+    assert [o['name'] for o in pedido['operations']] == ['calcularTotal']
+    assert [l['name'] for l in doc.find('UMLEnumeration:Estado')['literals']] == ['ABIERTO', 'CERRADO']
+    assert ids_integros(dominio)
 
 
 def test_importar_tipos_metodos_y_vistas_sin_encimar(modelo, tmp_path):

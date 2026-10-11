@@ -190,7 +190,8 @@ SOLO_LECTURA = {'staruml_estado', 'staruml_reglas', 'mdj_resumen', 'mdj_modelo',
 DESTRUCTIVAS = {'staruml_exportar', 'svg_recortar', 'staruml_ver_visual', 'staruml_diagrama_a_codigo',
                 'staruml_codigo_a_diagrama', 'staruml_programa_a_diagrama', 'mdj_diagrama_crear', 'mdj_renombrar',
                 'mdj_documentacion', 'mdj_atributos', 'mdj_asociacion_editar', 'mdj_borrar', 'mdj_vista_mover',
-                'mdj_linea_ruta', 'mdj_linea_etiqueta', 'mdj_nota', 'mdj_secuencia_generar'}
+                'mdj_linea_ruta', 'mdj_linea_etiqueta', 'mdj_nota', 'mdj_secuencia_generar',
+                'mdj_robustez_generar'}
 # solo agregan
 ADITIVAS = {'mdj_respaldar', 'mdj_clase_crear', 'mdj_paquete_crear', 'mdj_dibujar', 'mdj_diagrama_generar',
             'mdj_elemento_crear', 'mdj_relacion_crear', 'mdj_asociacion_crear', 'mdj_vista_agregar'}
@@ -199,6 +200,7 @@ ADITIVAS = {'mdj_respaldar', 'mdj_clase_crear', 'mdj_paquete_crear', 'mdj_dibuja
 def test_anotaciones_de_todas_las_herramientas():
     nombres = {t['name'] for t in S.TOOLS}
     assert nombres == SOLO_LECTURA | DESTRUCTIVAS | ADITIVAS, 'herramienta sin clasificar'
+    assert not (SOLO_LECTURA & DESTRUCTIVAS or SOLO_LECTURA & ADITIVAS or DESTRUCTIVAS & ADITIVAS), 'en dos grupos'
     for t in S.TOOLS:
         ann = t['annotations']
         if t['name'] in SOLO_LECTURA:
@@ -207,6 +209,32 @@ def test_anotaciones_de_todas_las_herramientas():
         else:
             assert ann['readOnlyHint'] is False, t['name']
             assert ann['destructiveHint'] is (t['name'] in DESTRUCTIVAS), t['name']
+
+
+def test_robustez_es_destructiva_porque_reemplaza_lo_que_reusa(dominio):
+    # Cliente ya existe en el paquete con tres atributos y dibujado en cu_1: el diagrama de analisis lo reusa y le
+    # deja solo los atributos y la documentacion que se le pasan, tambien en su vista de cu_1
+    doc = M.Doc(dominio)
+    cli = doc.find('UMLClass:Cliente')
+    assert [x['name'] for x in cli['attributes']] == ['nombre', 'email', 'direccion']
+    paquete = doc.name_of(doc.parent[cli['_id']])
+    dg = ok(tool('mdj_diagrama_crear', archivo=dominio, tipo='clases', nombre='Robustez', dentro_de=paquete))['diagrama']
+    ok(tool('mdj_robustez_generar', archivo=dominio, diagrama=dg, paquete=paquete, actores=[{'nombre': 'Asesor'}],
+            pantallas=[{'nombre': 'PantallaCliente'}], control={'nombre': 'ControlCliente'},
+            entidades=[{'nombre': 'Cliente', 'atributos': ['rfc'], 'documentacion': 'Quien renta'}]))
+    doc = M.Doc(dominio)
+    cli = doc.find('UMLClass:Cliente')
+    assert [x['name'] for x in cli['attributes']] == ['rfc'] and cli['documentation'] == 'Quien renta'
+    v = doc.view_in(doc.diagram('cu_1'), cli['_id'])
+    assert [s['model']['$ref'] for s in _todas({'ownedViews': [v]}) if s['_type'] == 'UMLAttributeView'] == \
+        [cli['attributes'][0]['_id']]
+    assert ids_integros(dominio)
+    # sin la lista de atributos, la entidad reusada conserva los que tiene
+    dg = ok(tool('mdj_diagrama_crear', archivo=dominio, tipo='clases', nombre='Robustez2', dentro_de=paquete))['diagrama']
+    ok(tool('mdj_robustez_generar', archivo=dominio, diagrama=dg, paquete=paquete, actores=[{'nombre': 'Asesor'}],
+            pantallas=[{'nombre': 'PantallaCliente'}], control={'nombre': 'ControlCliente'},
+            entidades=[{'nombre': 'Cliente'}]))
+    assert [x['name'] for x in M.Doc(dominio).find('UMLClass:Cliente')['attributes']] == ['rfc']
 
 
 # ---------------------------------------------------------------------------

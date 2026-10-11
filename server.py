@@ -191,18 +191,24 @@ def t_buscar(a):
 
 
 @tool('mdj_validar', 'Integridad (ids duplicados, referencias colgantes, _parent que no coincide) y, si oose=true, reglas de '
-      'robustez: metodos o atributos donde no van, mas de un control, asociaciones prohibidas, mensajes no validos, '
+      'robustez: metodos o atributos donde no van (que metodos se admiten lo dice metodos), mas de un control, '
+      'asociaciones prohibidas, mensajes no validos, '
       'entity->entity sin asociacion, consultas sin reply, vistas de mensaje incompletas y llamadas sin activacion; '
       'ademas, reglas de diagramas de estados (inicial unico, finales sin salida, estados inalcanzables o sin salida, '
       'decisiones sin guarda, transiciones ambiguas) y de actividades (uniones y bifurcaciones implicitas, nodos '
       'inalcanzables, decisiones sin guarda). Siempre revisa tambien el metamodelo de StarUML: tipos desconocidos, '
       'elementos en campos que no los admiten, vistas que el diagrama no admite y lineas sin extremos validos; y lineas '
       'que salen de un elemento anidado hacia afuera de su contenedor (lo atraviesan).',
-      obj({'archivo': ARCHIVO, 'oose': B(description='Revisar tambien reglas OOSE (default true)')}, ['archivo']),
+      obj({'archivo': ARCHIVO, 'oose': B(description='Revisar tambien reglas OOSE (default true)'),
+           'metodos': S(enum=list(M.METODOS_OOSE),
+                        description='Que metodos admite la regla OOSE. ninguno (default): ni boundary, ni control, ni '
+                                    'entity, ni actores llevan metodos. control_getset: el control puede tener metodos, '
+                                    'cada entity solo get/set/is de sus propios atributos (getX, setX, isX; se mira el '
+                                    'nombre, no los parametros) y las boundary y los actores ninguno')}, ['archivo']),
       ro('Validar'))
 def t_validar(a):
     doc = M.Doc(a['archivo'])
-    res = M.validar(doc, oose=a.get('oose', True) is not False)
+    res = M.validar(doc, oose=a.get('oose', True) is not False, metodos=a.get('metodos') or 'ninguno')
     res['metamodelo'] = U.validar_metamodelo(doc)
     res['lineas_que_atraviesan_contenedores'] = U.lineas_que_salen(doc)
     return res
@@ -255,13 +261,13 @@ def t_svg_recortar(a):
 # Visualizacion e integracion con codigo
 # ---------------------------------------------------------------------------
 
-@tool('staruml_ver_visual', 'Visualiza un diagrama como imagen PNG de alta resolucion. '
-      'Devuelve la imagen y sus metadatos para revisar el diseno a simple vista.',
+@tool('staruml_ver_visual', 'Visualiza un diagrama como imagen PNG (exportado con el CLI de StarUML y reducido a '
+      'max_lado). Devuelve la imagen y sus metadatos para revisar el diseno a simple vista.',
       obj({'archivo': ARCHIVO, 'diagrama': S(description='Nombre o id del diagrama a visualizar'),
            'salida': S(description='Ruta opcional para guardar el PNG (termina en .png; reemplaza un PNG que ya '
                                    'exista, nunca otro tipo de archivo)'),
-           'max_lado': N(description='Lado maximo en pixeles (default 1600 para balance optimo)'),
-           'forzar': B(description='Forzar re-exportacion aunque exista cache')},
+           'max_lado': N(description='Lado maximo en pixeles (default 1600)'),
+           'forzar': B(description='Volver a exportar aunque el SVG de ese diagrama ya este en la cache')},
           ['archivo', 'diagrama']), rw('Ver diagrama visual', destructive=True))
 def t_ver_visual(a):
     r = R.ver_visual(a['archivo'], a['diagrama'], salida=a.get('salida'),
@@ -281,9 +287,9 @@ def t_ver_visual(a):
     return {'__content__': content}
 
 
-@tool('staruml_comparar_codigo', 'Compara exhaustivamente un diagrama UML (de clases o de secuencia) contra codigo fuente '
-      '(Java, Python, TypeScript/JavaScript, C#, Kotlin, Go). Analiza clases, atributos, metodos, tipos, '
-      'asociaciones y llamadas de secuencia, calculando el porcentaje de alineacion y reportando discrepancias.',
+@tool('staruml_comparar_codigo', 'Compara un diagrama UML (de clases o de secuencia) contra codigo fuente '
+      '(Java, Python, TypeScript/JavaScript, C#, Kotlin, Go): clases, atributos, metodos, tipos, asociaciones y '
+      'llamadas de secuencia. Devuelve las diferencias y que porcentaje coincide (porcentaje_sincronizacion).',
       obj({'archivo': ARCHIVO, 'diagrama': S(description='Nombre o id del diagrama de clases o secuencia'),
            'ruta_codigo': S(description='Carpeta o archivo de codigo fuente a comparar'),
            'lenguaje': S(enum=['auto', 'java', 'python', 'typescript', 'csharp', 'kotlin', 'go'], description='Lenguaje (default auto)')},
@@ -293,8 +299,8 @@ def t_comparar_codigo(a):
     return C.comparar_diagrama_con_codigo(doc, a['diagrama'], a['ruta_codigo'], a.get('lenguaje', 'auto'))
 
 
-@tool('staruml_diagrama_a_codigo', 'Genera esqueletos de codigo limpios y tipados (Java, Python, TypeScript, C#) listos para '
-      'implementar a partir de las clases, atributos, metodos y asociaciones de un diagrama de clases del .mdj. '
+@tool('staruml_diagrama_a_codigo', 'Genera esqueletos de codigo (Java, Python, TypeScript, C#) a partir de las clases, '
+      'atributos, metodos y asociaciones de un diagrama de clases del .mdj. '
       'No reemplaza archivos que ya existen en carpeta_salida salvo con sobrescribir=true.',
       obj({'archivo': ARCHIVO, 'diagrama': S(description='Nombre o id del diagrama de clases'),
            'lenguaje': S(enum=['java', 'python', 'typescript', 'csharp'], description='Lenguaje de destino (default java)'),
@@ -337,7 +343,8 @@ def t_codigo_a_diagrama(a):
       'enumeraciones, con atributos y metodos (visibilidad, static, abstract), herencia, interfaces implementadas y las '
       'asociaciones que salen de los campos (rol y multiplicidad; una sola asociacion navegable en ambos sentidos cuando '
       'las dos clases se referencian). Acomoda las cajas por niveles (la clase base arriba) sin encimarlas y rutea las '
-      'lineas por los canales libres para que no crucen otras cajas. Si el .mdj no existe, lo crea.',
+      'lineas por los canales libres para no cruzar otras cajas; las que aun asi cruzan alguna salen en '
+      'lineas_que_cruzan_cajas de cada diagrama. Si el .mdj no existe, lo crea.',
       obj({'archivo': S(description='Proyecto .mdj donde se dibuja; si no existe se crea uno nuevo'),
            'ruta_codigo': S(description='Carpeta (o archivo) del programa'),
            'lenguaje': S(enum=['java', 'auto', 'python', 'typescript', 'csharp', 'kotlin', 'go'],
@@ -407,7 +414,8 @@ def t_respaldar(a):
 
 
 @tool('mdj_clase_crear', 'Crea una clase (estereotipo boundary, control, entity o ninguno) o un actor (estereotipo actor) '
-      'en un paquete, con atributos (no para boundary, control ni actores) y documentacion. Para dibujarla usa mdj_vista_agregar.',
+      'en un paquete, con atributos (no para boundary, control ni actores) y documentacion. Falla si en ese paquete ya '
+      'hay una clase con ese nombre (o un actor, si se crea un actor). Para dibujarla usa mdj_vista_agregar.',
       obj({'archivo': ARCHIVO, 'paquete': S(), 'nombre': S(),
            'estereotipo': S(enum=['boundary', 'control', 'entity', 'ninguno', 'actor']),
            'atributos': {'type': 'array', 'items': {'type': 'string'}}, 'documentacion': S(), 'salida': SALIDA, 'forzar': FORZAR},
@@ -418,8 +426,9 @@ def t_clase_crear(a):
     est = a.get('estereotipo') or 'ninguno'
     if est in ('boundary', 'control', 'actor') and a.get('atributos'):
         raise M.MdjError('Boundary, control y actores van sin atributos')
-    c = {'_type': 'UMLActor' if est == 'actor' else 'UMLClass', '_id': doc.new_id(), '_parent': M.ref(pk['_id']),
-         'name': a['nombre']}
+    tipo = 'UMLActor' if est == 'actor' else 'UMLClass'
+    M.nombre_libre(pk, a['nombre'], tipo)
+    c = {'_type': tipo, '_id': doc.new_id(), '_parent': M.ref(pk['_id']), 'name': a['nombre']}
     if a.get('documentacion'):
         c['documentation'] = a['documentacion']
     if est not in ('ninguno', 'actor'):
@@ -431,7 +440,8 @@ def t_clase_crear(a):
     return escribir(doc, a, {'clase': c['_id']})
 
 
-@tool('mdj_paquete_crear', 'Crea un paquete dentro del modelo raiz (o dentro del modelo o paquete indicado).',
+@tool('mdj_paquete_crear', 'Crea un paquete dentro del modelo raiz (o dentro del modelo o paquete indicado). Falla si '
+      'ahi ya hay un paquete (o un modelo) con ese nombre.',
       obj({'archivo': ARCHIVO, 'nombre': S(), 'dentro_de': S(description='Nombre o id del modelo o paquete padre (default: el modelo raiz)'),
            'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'nombre']), rw('Crear paquete'))
 def t_paquete_crear(a):
@@ -465,14 +475,26 @@ def t_diagrama_crear(a):
       'StarUML: el elemento de modelo y su vista (nodo, componente, artefacto, puerto, estado, accion, decision, lifeline, '
       'tarea BPMN, entidad ERD...; o una linea: dependencia, despliegue, manifestacion, ruta de comunicacion, conector, '
       'transicion, flujo, mensaje...). simbolo = nombre de la paleta (mdj_catalogo con el diagrama los lista). '
-      'Cajas en x,y (o en el primer lugar libre); las que van encima de otra (puerto, pin, region, particion, lifeline de '
-      'tiempos) llevan sobre. Las lineas llevan desde y hasta (vista o elemento ya dibujado).',
+      'Cajas en x,y (o en el primer lugar libre). Solo los simbolos que en mdj_catalogo traen va_sobre se pegan a otra '
+      'vista y llevan sobre: puerto, parte, pin, nodo de expansion, referencia a punto de conexion, auto-transicion, '
+      'auto-mensaje, auto-conector, invariante de estado, restriccion de tiempo, evento de borde BPMN y, en tiempos, '
+      'lifeline, estado, segmento y marca de tiempo. Los demas (carriles, estados, acciones...) van en x,y: con sobre '
+      'dan error. Las lineas llevan desde y hasta (vista o elemento ya dibujado).',
       obj({'archivo': ARCHIVO, 'diagrama': S(), 'simbolo': S(), 'nombre': S(), 'x': N(), 'y': N(), 'ancho': N(), 'alto': N(),
-           'sobre': S(description='Vista o elemento sobre el que va el simbolo'),
+           'sobre': S(description='Vista o elemento sobre el que va el simbolo (solo los que traen va_sobre en '
+                                  'mdj_catalogo)'),
            'desde': S(description='Linea: vista o elemento de origen'), 'hasta': S(description='Linea: vista o elemento destino'),
            'puntos': PUNTOS, 'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'diagrama', 'simbolo']), rw('Dibujar simbolo'))
 def t_dibujar(a):
     doc = M.Doc(a['archivo'])
+    if a.get('sobre') is not None:
+        # dibujar no usa sobre en un simbolo sin va_sobre: lo pondria en otro lugar sin decir nada
+        clave, p = U.plantilla_simbolo(doc.diagram(a['diagrama'])['_type'], a['simbolo'])
+        if p['forma'] == 'line':
+            raise M.MdjError(f'{clave.split("|")[0]} es una linea: lleva desde y hasta, no sobre')
+        if not any(U.necesita(p)):
+            raise M.MdjError(f'{clave.split("|")[0]} no va sobre otra vista (en mdj_catalogo no trae va_sobre): '
+                             'quita sobre e indica x, y')
     r = U.dibujar(doc, a['diagrama'], a['simbolo'], a.get('nombre'), a.get('x'), a.get('y'), a.get('ancho'), a.get('alto'),
                   a.get('desde'), a.get('hasta'), a.get('sobre'), a.get('puntos') or ())
     return escribir(doc, a, r)
@@ -484,7 +506,7 @@ def t_dibujar(a):
       'accion en su particion) moviendo tambien el elemento de modelo, dimensiona cada contenedor segun lo que lleva y '
       'rutea las lineas de primer nivel para que no crucen otras cajas. Lo nuevo va debajo de lo que ya tenga el diagrama. '
       'Avisa (avisos) cuando una linea sale de un elemento anidado hacia afuera de su contenedor y lista las lineas que '
-      'cruzan cajas. '
+      'aun asi cruzan cajas (lineas_que_cruzan_cajas). '
       'Los simbolos son los de la paleta del diagrama (mdj_catalogo).',
       obj({'archivo': ARCHIVO, 'diagrama': S(),
            'elementos': {'type': 'array', 'items': obj({
@@ -508,38 +530,63 @@ def t_diagrama_generar(a):
 
 
 @tool('mdj_robustez_generar', 'Dibuja el diagrama de analisis (robustez, OOSE) de un caso de uso con la disposicion '
-      'clasica: actor a la izquierda, pantallas (boundary) en columna con su nota opcional, un control y a la derecha el '
-      'modelo de dominio (entidades por capas segun la navegabilidad, lineas ruteadas sin cruzar cajas). Crea los '
-      'elementos que falten en el paquete (o reusa los que ya existen), con atributos solo en las entidades, y dibuja '
-      'actor-pantalla y pantalla-control rectas con flecha y las asociaciones entre entidades con flecha, multiplicidad '
-      'y rol. Control-entidad solo con lineas_control. Para boundary, control y entity usa esta herramienta en lugar de '
-      'mdj_diagrama_generar.',
+      'clasica: actores a la izquierda, pantallas (boundary) en columna, cada una con su nota opcional debajo, un '
+      'control y a la derecha el modelo de dominio (entidades por capas segun la navegabilidad y la herencia; las '
+      'lineas se rutean para no cruzar cajas y las que aun asi cruzan alguna salen en lineas_que_cruzan_cajas). Crea en '
+      'el paquete los elementos que falten y reusa los que ya existen con el mismo nombre (un actor, tambien de otro '
+      'paquete si es el unico con ese nombre). Ojo, en uno reusado: si la entidad trae atributos, quedan exactamente '
+      'esos (los demas se quitan del modelo y de sus vistas en cualquier diagrama) y la documentacion que se pase '
+      'reemplaza la anterior. Atributos solo en las entidades. Dibuja con flecha actor-pantalla (con secundario, de la '
+      'pantalla al actor) y pantalla-control, rectas o con un codo si la recta tocaria otra caja o una nota; las '
+      'asociaciones entre entidades con flecha, multiplicidad y rol, y las generalizaciones. Si entre los mismos dos '
+      'elementos ya hay una asociacion (o esa generalizacion), la reusa en vez de crear otra: en la asociacion reusada '
+      'solo cambia lo que se pide y es distinto (multiplicidad o rol no vacios, navegable) y lo demas queda como estaba; '
+      'las lineas actor-pantalla, pantalla-control y control-entidad no piden nada (secundario solo da el sentido de una '
+      'linea nueva). reusadas dice que se le cambio a cada asociacion reusada y, si cambio algo, en que otros '
+      'diagramas ya se veia. Control-entidad solo con lineas_control (no a las que tienen depende_de). Falla si alguno '
+      'de los elementos ya esta dibujado en ese diagrama. Devuelve tambien la revision OOSE del modelo. Para boundary, '
+      'control y entity usa esta herramienta en lugar de mdj_diagrama_generar.',
       obj({'archivo': ARCHIVO, 'diagrama': S(description='Diagrama de clases (vacio) donde se dibuja'),
            'paquete': S(description='Paquete donde quedan los elementos'),
            'actores': {'type': 'array', 'items': obj({'nombre': S(), 'documentacion': S(),
                                                       'pantallas': {'type': 'array', 'items': S(),
-                                                                    'description': 'Las que usa (default: todas)'}},
+                                                                    'description': 'Las que usa (default: todas)'},
+                                                      'secundario': B(description='Actor externo al que el sistema le '
+                                                                                  'avisa (un servicio de correo, por '
+                                                                                  'ejemplo): la flecha va de la pantalla '
+                                                                                  'hacia el (default false)')},
                                                      ['nombre'])},
            'pantallas': {'type': 'array', 'description': 'Boundaries, de arriba abajo',
                          'items': obj({'nombre': S(), 'documentacion': S(),
-                                       'nota': S(description='Texto de una nota debajo de la pantalla')}, ['nombre'])},
+                                       'nota': S(description='Texto de una nota debajo de la pantalla')},
+                                      ['nombre'])},
            'control': obj({'nombre': S(), 'documentacion': S()}, ['nombre']),
            'entidades': {'type': 'array', 'description': 'Las que usa el control, en el orden del flujo; las que solo se '
                                                          'alcanzan desde otra, con depende_de',
-                         'items': obj({'nombre': S(), 'atributos': {'type': 'array', 'items': S()},
+                         'items': obj({'nombre': S(),
+                                       'atributos': {'type': 'array', 'items': S(),
+                                                     'description': 'Lista completa: en una entidad que ya existe '
+                                                                    'reemplaza sus atributos (sin la lista se quedan '
+                                                                    'los que tiene)'},
                                        'documentacion': S(), 'depende_de': S()}, ['nombre'])},
-           'asociaciones': {'type': 'array', 'description': 'Entre entidades',
+           'asociaciones': {'type': 'array', 'description': 'Entre entidades. En una que ya existe solo se cambia lo '
+                                                            'que se da (multiplicidad o rol no vacios, navegable)',
                             'items': obj({'desde': S(), 'hasta': S(), 'mult_desde': S(), 'mult_hacia': S(),
                                           'rol_desde': S(), 'rol_hacia': S(),
                                           'navegable': S(enum=['hacia', 'ambos', 'ninguno', 'desde'])},
                                          ['desde', 'hasta'])},
+           'generalizaciones': {'type': 'array', 'description': 'Herencia entre entidades de la lista: el hijo hereda '
+                                                                'del padre, que queda arriba',
+                                'items': obj({'hijo': S(), 'padre': S()}, ['hijo', 'padre'])},
            'lineas_control': B(description='Dibujar tambien control -> entidad (default false)'),
            'salida': SALIDA, 'forzar': FORZAR},
-          ['archivo', 'diagrama', 'paquete', 'actores', 'pantallas', 'control', 'entidades']), rw('Generar robustez'))
+          ['archivo', 'diagrama', 'paquete', 'actores', 'pantallas', 'control', 'entidades']),
+      rw('Generar robustez', destructive=True))  # reemplaza atributos y documentacion de lo que reusa
 def t_robustez_generar(a):
     doc = M.Doc(a['archivo'])
     r = RB.generar_robustez(doc, a['diagrama'], a['paquete'], a['actores'], a['pantallas'], a['control'],
-                            a['entidades'], a.get('asociaciones') or [], bool(a.get('lineas_control')))
+                            a['entidades'], a.get('asociaciones') or [], bool(a.get('lineas_control')),
+                            a.get('generalizaciones') or [])
     r['oose'] = M.reglas_oose(doc)
     return escribir(doc, a, r)
 
@@ -812,8 +859,9 @@ def t_nota(a):
 
 
 @tool('mdj_secuencia_generar', 'Rehace por completo un diagrama de secuencia a partir de la lista de lifelines y mensajes, '
-      'con las reglas de trabajo: vistas completas, espaciado 29-36 / 50-56 / extra entre flujos, activaciones con pila de '
-      'llamadas, separacion de lifelines segun el ancho de las etiquetas y ninguna etiqueta sobre activaciones. Un mensaje '
+      'con las reglas de trabajo: vistas completas, espaciado 29-36 / 50-56 / extra entre flujos (por omision), '
+      'activaciones con pila de llamadas y separacion de lifelines segun el ancho de las etiquetas. Baja los mensajes '
+      'cuya etiqueta caeria sobre una activacion; si aun asi queda alguna, lo avisa en ajustes. Un mensaje '
       'con de == a es un auto-mensaje (lazo a la derecha con activacion anidada). Reusa roles y lifelines existentes del '
       'mismo tipo y conserva el marco.',
       obj({'archivo': ARCHIVO, 'diagrama': S(),

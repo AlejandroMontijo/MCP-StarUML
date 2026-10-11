@@ -33,11 +33,17 @@ def test_exportar_un_diagrama_por_id_aunque_haya_homonimos(modelo, tmp_path, sta
 
 
 def test_exportar_nombre_con_corchetes_y_barras(modelo, tmp_path, staruml_falso):
+    # el selector [name=...] no acepta corchetes: se elige el diagrama por una marca en la copia temporal, sin
+    # renombrarlo. El SVG lleva su nombre tal cual y el archivo solo cambia lo que ningun sistema admite ('/')
     doc = M.Doc(modelo)
-    doc.diagram('cu_1')['name'] = 'Vista [v2] / final'
+    dg = doc.diagram('cu_1')
+    dg['name'] = 'Vista [v2] / final'
     doc.save(backup=False)
     r = ok(tool('staruml_exportar', archivo=modelo, carpeta=str(tmp_path / 'out'), diagrama='Vista [v2] / final'))
-    assert os.path.basename(r['archivos'][0]) == 'Vista _v2_ _ final.svg' and 'corchetes' in r['nota']
+    assert os.path.basename(r['archivos'][0]) == 'Vista [v2] _ final.svg' and r['id'] == dg['_id']
+    texto = open(r['archivos'][0], encoding='utf-8').read()
+    assert f'data-id="{dg["_id"]}"' in texto and 'Vista [v2] / final' in texto
+    assert r['nota'] == '' and M.Doc(modelo).diagram(dg['_id'])['name'] == 'Vista [v2] / final'
 
 
 def test_exportar_todos(modelo, tmp_path, staruml_falso):

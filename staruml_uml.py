@@ -9,6 +9,7 @@
 # StarUML, y Doc.save() sigue rechazando cualquier cambio que deje ids o referencias rotas.
 import copy
 import json
+import math
 import os
 import re
 import unicodedata
@@ -679,7 +680,9 @@ def _rutear(doc, nuevos, principal, medios=()):
 PALABRA_CLAVE = {'UMLDeployment': 'deploy', 'UMLExtend': 'extend', 'UMLInclude': 'include', 'UMLTemplateBinding': 'bind',
                  'UMLManifestation': 'manifest', 'UMLInformationFlow': 'flow', 'UMLAbstraction': 'abstraction',
                  'SysMLConform': 'conform', 'SysMLExpose': 'expose', 'SysMLCopy': 'copy', 'SysMLDeriveReqt': 'deriveReqt',
-                 'SysMLSatisfy': 'satisfy', 'SysMLVerify': 'verify', 'SysMLRefine': 'refine', 'SysMLTrace': 'trace'}
+                 'SysMLSatisfy': 'satisfy', 'SysMLVerify': 'verify', 'SysMLRefine': 'refine', 'SysMLTrace': 'trace',
+                 # una realizacion (de interfaz o de componente) es una abstraccion, pero StarUML no le pone palabra
+                 'UMLRealization': None}
 
 
 def _separar_nombre(doc, v, nombre):
@@ -713,6 +716,265 @@ def _separar_nombre(doc, v, nombre):
             est['distance'] = round(ancho_n + ancho_e / 2 + 18)
         else:
             est['distance'] = max(est.get('distance') or 15, round(ancho_e / 2 + 10))
+
+
+# ---------------------------------------------------------------------------
+# Donde dibuja StarUML las etiquetas (se calcula igual que StarUML para que no queden sobre lineas, cajas u otros
+# textos)
+# ---------------------------------------------------------------------------
+
+def _rect(v):
+    return (v['left'], v['top'], v['left'] + v['width'], v['top'] + v['height'])
+
+
+def _centro_r(r):
+    return ((r[0] + r[2]) / 2, (r[1] + r[3]) / 2)
+
+
+def _junction_r(r, p):
+    """Punto del borde de r en la recta de su centro hacia p (Coord.junction)."""
+    return M.junction({'left': r[0], 'top': r[1], 'width': r[2] - r[0], 'height': r[3] - r[1]}, p)
+
+
+def _extremo_staruml(v):
+    """(rectangulo, es_linea) de un extremo como lo usa StarUML: la caja de la vista o, si el extremo es otra linea,
+    el rectangulo de su tramo de en medio."""
+    if _es_caja(v):
+        return _rect(v), False
+    if v is not None and isinstance(v.get('points'), str):
+        pts = [tuple(map(float, p.split(':'))) for p in v['points'].split(';')]
+        i = (len(pts) - 1) // 2
+        a, b = pts[i], pts[min(i + 1, len(pts) - 1)]
+        return (min(a[0], b[0]), min(a[1], b[1]), max(a[0], b[0]), max(a[1], b[1])), True
+    return None, False
+
+
+def _puntos_staruml(doc, v):
+    """Puntos de una linea como quedan al abrir el archivo en StarUML (EdgeView.reducePoints y recalcOblique): se
+    quitan los intermedios que caen dentro de la caja de un extremo y cada extremo va al borde de su caja, en la recta
+    hacia el punto vecino (en las rectilineas y los lazos, en la direccion del vecino)."""
+    pts = [tuple(map(float, p.split(':'))) for p in v['points'].split(';')]
+    if len(pts) < 2:
+        return pts
+    t = doc.ids.get((v.get('tail') or {}).get('$ref'))
+    h = doc.ids.get((v.get('head') or {}).get('$ref'))
+    (rt, lt), (rh, lh) = _extremo_staruml(t), _extremo_staruml(h)
+
+    def dentro(p, r):
+        return r[0] <= p[0] <= r[2] and r[1] <= p[1] <= r[3]
+    if rt is not None and not lt:
+        i = 1
+        while i < len(pts) - 1:
+            if dentro(pts[i], rt):
+                del pts[1:i + 1]
+                i = 1
+            else:
+                i += 1
+    if rh is not None and not lh:
+        i = 1
+        while i < len(pts) - 1:
+            if dentro(pts[i], rh):
+                del pts[i:len(pts) - 1]
+            else:
+                i += 1
+    recto = v.get('lineStyle') in (0, 2) or (t is not None and t is h)
+
+    def borde(r, vecino):
+        r = (r[0] - 1, r[1] - 1, r[2] + 1, r[3] + 1)
+        if recto and r[0] <= vecino[0] <= r[2]:
+            return (vecino[0], r[1] if vecino[1] < r[1] else r[3])
+        if recto and r[1] <= vecino[1] <= r[3]:
+            return (r[0] if vecino[0] < r[0] else r[2], vecino[1])
+        return _junction_r(r, vecino)
+    if rt is not None:
+        pts[0] = _centro_r(rt)
+    if rh is not None:
+        pts[-1] = _centro_r(rh)
+    if rt is not None and not lt:
+        pts[0] = borde(rt, pts[1])
+    if rh is not None and not lh:
+        pts[-1] = borde(rh, pts[-2])
+    return [(round(x), round(y)) for x, y in pts]
+
+
+def _lejos_de_linea(t, h, alpha, d):
+    """Coord.getPointAwayLine de StarUML."""
+    a, b = t[0] - h[0], t[1] - h[1]
+    th = math.atan(abs(b) / (abs(a) + 0.000001))
+    if a > 0:
+        th = math.pi - th if b > 0 else th + math.pi
+    elif b < 0:
+        th = 2 * math.pi - th
+    return math.floor(d * math.cos(th + alpha)), math.floor(-d * math.sin(th + alpha))
+
+
+def _ancla(pts, posicion):
+    """(p1, p2) de los que StarUML mide una etiqueta de linea: la cabeza, la cola o el centro (EP_HEAD 0, EP_MIDDLE
+    1, EP_TAIL 2). En el centro, con un numero par de puntos es la mitad del tramo de en medio; con uno impar, el
+    punto de en medio."""
+    if posicion == 0:
+        return pts[-1], pts[-2]
+    if posicion == 2:
+        return pts[0], pts[1]
+    n = len(pts)
+    i = n // 2 - (1 if n % 2 == 0 else 0)
+    p1, p2 = pts[i], pts[i + 1]
+    if n % 2 == 0:
+        p1 = (math.floor((p1[0] + p2[0]) / 2), math.floor((p1[1] + p2[1]) / 2))
+    return p1, p2
+
+
+def _caja_texto(cx, cy, texto):
+    w = M.ancho13(texto)
+    return (cx - w / 2, cy - 7, cx + w / 2, cy + 7)
+
+
+def _textos_de_linea(doc, v):
+    """[(subvista de etiqueta, texto que mostrara StarUML)] del nombre y el estereotipo de una linea."""
+    m = doc.ids.get((v.get('model') or {}).get('$ref')) if isinstance(v.get('model'), dict) else None
+    if not m:
+        return []
+    res = []
+    lab = doc.ids.get((v.get('nameLabel') or {}).get('$ref'))
+    if lab is not None and m.get('name'):
+        res.append((lab, '+' + m['name']))
+    clave = next((PALABRA_CLAVE[a] for a in ancestros(m['_type']) if a in PALABRA_CLAVE), None)
+    if isinstance(m.get('stereotype'), dict):
+        clave = doc.name_of(m['stereotype']['$ref'])
+    est = doc.ids.get((v.get('stereotypeLabel') or {}).get('$ref'))
+    if est is not None and clave:
+        res.append((est, f'\u00ab{clave}\u00bb'))
+    return [(lab_, t) for lab_, t in res if isinstance(lab_.get('alpha'), (int, float))
+            and isinstance(lab_.get('distance'), (int, float))]
+
+
+# vistas que son zonas (marcos, carriles, regiones...): solo su borde estorba a un texto
+_ZONAS = ('Frame', 'Fragment', 'Operand', 'InteractionUse', 'Continuation', 'Swimlane', 'Partition', 'Lane', 'Pool',
+          'Group', 'Zone', 'Region', 'Timing')
+
+
+def _es_zona(v):
+    return any(z in v.get('_type', '') for z in _ZONAS)
+
+
+# lineas que StarUML no dibuja por sus puntos (un mensaje de tiempos va de un segmento de tiempo al otro): no se sabe
+# donde quedan ni ellas ni sus textos, asi que ni se acomodan ni estorban
+_DIBUJO_PROPIO = ('UMLTimingMessageView',)
+
+
+def _por_sus_puntos(v):
+    return es_linea(v.get('_type', '')) and isinstance(v.get('points'), str) and v['_type'] not in _DIBUJO_PROPIO
+
+
+def _acomodar_etiquetas(doc, dg, lineas, bordes):
+    """Las etiquetas de las lineas dadas (nombre y estereotipo) y de los puertos o pines dados (su nombre) que
+    StarUML pondria sobre una linea, una caja u otro texto se mueven (alpha y distance) al lugar libre mas cercano.
+    Se calcula donde las dibuja StarUML: no usa left/top sino la linea (o la caja) y alpha y distance."""
+    import staruml_programa as P
+    cajas = [v for v in dg.get('ownedViews', []) if _es_caja(v) and v.get('visible') is not False]
+    rects = {id(v): _rect(v) for v in cajas}
+    segs = []  # (p, q, vista de la que es el borde o None si es una linea)
+    for v in dg.get('ownedViews', []):
+        if _por_sus_puntos(v) and v.get('visible') is not False:
+            pts = _puntos_staruml(doc, v)
+            segs += [(p, q, None) for p, q in zip(pts, pts[1:])]
+    # una caja con otras adentro (paquete, sistema, nodo, carril...) estorba con su borde y con su nombre (arriba);
+    # las demas, completas
+    llenos = []
+    for v in cajas:
+        r = rects[id(v)]
+        segs += [(p, q, v) for p, q in (((r[0], r[1]), (r[2], r[1])), ((r[2], r[1]), (r[2], r[3])),
+                                         ((r[2], r[3]), (r[0], r[3])), ((r[0], r[3]), (r[0], r[1])))]
+        con_algo = any(w is not v and _contiene(r, rects[id(w)]) for w in cajas)
+        if con_algo and not _es_zona(v):
+            llenos.append((v, (r[0], r[1], r[2], r[1] + 35)))
+        elif not _es_zona(v):
+            llenos.append((v, r))
+        z = _zona_nombre(v)
+        if z:
+            llenos.append((v, z))
+    textos = []
+    ids_lineas = {id(v) for v in lineas}
+    # los textos que no se mueven tambien estorban
+    for v in dg.get('ownedViews', []):
+        if _por_sus_puntos(v) and id(v) not in ids_lineas:
+            pts = _puntos_staruml(doc, v)
+            if len(pts) > 1:
+                for lab, t in _textos_de_linea(doc, v):
+                    p1, p2 = _ancla(pts, lab.get('edgePosition', 1))
+                    dx, dy = _lejos_de_linea(p1, p2, lab['alpha'], lab['distance'])
+                    textos.append(_caja_texto(p1[0] + dx, p1[1] + dy, t))
+    ids_bordes = {id(v) for v in bordes}
+    for v in cajas:
+        lab = doc.ids.get((v.get('nameLabel') or {}).get('$ref'))
+        m = doc.ids.get((v.get('model') or {}).get('$ref')) if isinstance(v.get('model'), dict) else None
+        if id(v) not in ids_bordes and lab is not None and m and m.get('name') and lab.get('visible') is not False \
+                and isinstance(lab.get('alpha'), (int, float)) and isinstance(lab.get('distance'), (int, float)) \
+                and any(x in v['_type'] for x in ('PortView', 'PinView', 'ExpansionNodeView', 'ConnectionPoint')):
+            cx, cy = _centro_r(rects[id(v)])
+            dx, dy = _lejos_de_linea((cx, cy), (cx, cy), lab['alpha'], lab['distance'])
+            textos.append(_caja_texto(cx + dx, cy + dy, m['name']))
+
+    def choques(r, propia=None):
+        e = (r[0] - 2, r[1] - 2, r[2] + 2, r[3] + 2)
+        n = sum(1 for p, q, de in segs if (de is None or de is not propia) and P._cruza(p, q, e, 0))
+        n += sum(1 for v, w in llenos if v is not propia and e[0] < w[2] and w[0] < e[2] and e[1] < w[3] and w[1] < e[3])
+        return n + sum(1 for w in textos if e[0] < w[2] and w[0] < e[2] and e[1] < w[3] and w[1] < e[3])
+
+    for v in bordes:
+        lab = doc.ids.get((v.get('nameLabel') or {}).get('$ref'))
+        m = doc.ids.get((v.get('model') or {}).get('$ref')) if isinstance(v.get('model'), dict) else None
+        if lab is None or not m or not m.get('name') or not isinstance(lab.get('alpha'), (int, float)):
+            continue
+        cx, cy = _centro_r(rects[id(v)])
+        w = M.ancho13(m['name'])
+        # su caja y las que la contienen no estorban con todo su rectangulo (el nombre puede ir adentro)
+        duenos = [c for c in cajas if c is v or _contiene(rects[id(c)], (cx, cy, cx, cy))]
+        quitar = [x for x in llenos if x[0] in duenos and x[1] == rects[id(x[0])]]
+        for x in quitar:
+            llenos.remove(x)
+        # de la caja donde va, solo estorba su nombre (arriba)
+        nombres = [(c, (r_[0], r_[1], r_[2], r_[1] + 25)) for c, r_ in quitar if c is not v]
+        llenos.extend(nombres)
+        lados = [lab['alpha'], math.pi / 4, -3 * math.pi / 4, -math.pi / 4, 3 * math.pi / 4, math.pi / 2,
+                 -math.pi / 2, 0, math.pi]
+        cands = []
+        for k, a in enumerate(lados):
+            for d in ((lab['distance'], 30) if abs(math.sin(a)) > 0.5 else (round(w / 2) + 14, round(w / 2) + 24)):
+                dx, dy = _lejos_de_linea((cx, cy), (cx, cy), a, d)
+                r = _caja_texto(cx + dx, cy + dy, m['name'])
+                cands.append((choques(r, v), k, a, d, r))
+        for x in nombres:
+            llenos.remove(x)
+        llenos.extend(quitar)
+        mejor = min(cands, key=lambda c: c[:2])
+        _, _, a, d, r = mejor
+        lab['alpha'], lab['distance'] = a, d
+        lab['left'], lab['top'] = round(r[0], 2), round(r[1] - 0.5, 2)
+        textos.append(r)
+    for v in lineas:
+        if not _por_sus_puntos(v):
+            continue
+        pts = _puntos_staruml(doc, v)
+        if len(pts) < 2:
+            continue
+        for lab, t in _textos_de_linea(doc, v):
+            pos = lab.get('edgePosition', 1)
+            p1, p2 = _ancla(pts, pos)
+            a0, d0 = lab['alpha'], lab['distance']
+            # donde iba o del otro lado; si no, lo mas cerca de la linea: de lado, en diagonal o a lo largo
+            lados = [a0, -a0] if a0 else [a0, math.pi]
+            pares = [(a, d0) for a in lados] + [
+                (a, d) for d in range(15, 104, 8)
+                for a in lados + [math.pi / 4, -math.pi / 4, 3 * math.pi / 4, -3 * math.pi / 4, 0, math.pi]]
+            cands = []
+            for a, d in pares:
+                dx, dy = _lejos_de_linea(p1, p2, a, d)
+                r = _caja_texto(p1[0] + dx, p1[1] + dy, t)
+                cands.append((choques(r), len(cands), a, d, r))
+            _, _, a, d, r = min(cands, key=lambda c: c[:2])
+            lab['alpha'], lab['distance'] = a, d
+            textos.append(r)
 
 
 def _acomodar_lo_que_crea(doc, nuevos, v):
@@ -853,17 +1115,19 @@ def dibujar(doc, diagrama, simbolo, nombre=None, x=None, y=None, ancho=None, alt
     _renombrar(doc, nuevos, p, nombre)
     avisos += _nombre_visible(doc, nuevos, p, clave, nombre, dg)
     v = doc.get(nuevos[p['principal']])
+    linea = v
     if p['forma'] == 'line':
+        linea = doc.get(nuevos[_id_linea(p)])
         if vc is not None:
-            v['tail'] = ref(vc['_id'])
+            linea['tail'] = ref(vc['_id'])
         if vh is not None:
-            v['head'] = ref(vh['_id'])
-        _rutear(doc, nuevos, v, medios)
+            linea['head'] = ref(vh['_id'])
+        _rutear(doc, nuevos, linea, medios)
         if v.get('_type') == 'UMLSeqMessageView' and (vc is not None or vh is not None):
             # un mensaje de secuencia es horizontal: a la altura pedida (y) o debajo del ultimo del diagrama
             _mensaje_en(doc, v, round(y_pedida) if y_pedida is not None else _debajo_de_los_mensajes(dg, v))
-        _acomodar_lo_que_crea(doc, nuevos, v)
-        _separar_nombre(doc, v, nombre)
+        _acomodar_lo_que_crea(doc, nuevos, linea)
+        _separar_nombre(doc, linea, nombre if linea is v else None)
     else:
         if ancho is not None:
             v['width'] = ancho
@@ -871,8 +1135,21 @@ def dibujar(doc, diagrama, simbolo, nombre=None, x=None, y=None, ancho=None, alt
             v['height'] = alto
     doc.reindex()
     m = v.get('model', {}).get('$ref') if isinstance(v.get('model'), dict) else None
-    return {'simbolo': clave.split('|')[0], 'vista': v['_id'], 'vista_tipo': v['_type'], 'elemento': m,
-            'elemento_tipo': doc.ids[m]['_type'] if m in doc.ids and doc.ids[m] else None, 'avisos': avisos}
+    r = {'simbolo': clave.split('|')[0], 'vista': v['_id'], 'vista_tipo': v['_type'], 'elemento': m,
+         'elemento_tipo': doc.ids[m]['_type'] if m in doc.ids and doc.ids[m] else None, 'avisos': avisos}
+    if linea is not v:
+        r['linea'] = linea['_id']
+    return r
+
+
+def _id_linea(p):
+    """Id (en la plantilla) de la linea que va de un extremo al otro. Casi siempre es la vista principal; en la clase
+    asociacion y el objeto de enlace la principal es el enlace punteado de su caja a esa linea, que no se toca."""
+    for e in p['objetos']:
+        o = e['objeto']
+        if (o.get('tail') or {}).get('$ref') == '@cola' and (o.get('head') or {}).get('$ref') == '@cabeza':
+            return o['_id']
+    return p['principal']
 
 
 def _marcas(o):
@@ -1129,11 +1406,12 @@ def vista_de(doc, diagrama, elemento, x=None, y=None, ancho=None, alto=None, des
             if o and isinstance(o.get('text'), str) and viejo in o['text']:
                 o['text'] = o['text'].replace(viejo, el['name'])
     if p['forma'] == 'line':
+        linea = doc.get(nuevos[_id_linea(p)])
         if vc is not None:
-            v['tail'] = ref(vc['_id'])
+            linea['tail'] = ref(vc['_id'])
         if vh is not None:
-            v['head'] = ref(vh['_id'])
-        _rutear(doc, nuevos, v, medios)
+            linea['head'] = ref(vh['_id'])
+        _rutear(doc, nuevos, linea, medios)
         if v.get('_type') == 'UMLSeqMessageView':
             # debajo del ultimo mensaje del diagrama (o a la altura pedida)
             _mensaje_en(doc, v, round(y) if y is not None else _debajo_de_los_mensajes(dg, v))
@@ -1157,13 +1435,23 @@ def _tam_natural(p, nombre):
     Los iconos (eventos, pseudoestados, decisiones...) se quedan de su tamano."""
     v = next(e['objeto'] for e in p['objetos'] if e['objeto'].get('_id') == p['principal'])
     w, h = v.get('width') or 40, v.get('height') or 40
+    texto = nombre or ''
+    modelo = next((e['objeto'] for e in p['objetos'] if e['objeto'].get('_id') == p.get('modelo')), {})
+    sub = next((e['objeto'] for e in p['objetos'] if isinstance(modelo.get('submachine'), dict)
+                and e['objeto'].get('_id') == modelo['submachine'].get('$ref')), None)
+    if sub and sub.get('name'):
+        # un estado submaquina muestra "nombre: maquina"
+        texto = f'{texto}: {sub["name"]}'
     if w >= 40 and (h >= 25 or w >= 2 * h):  # caja con texto (una tarea BPMN es ancha y baja); no un icono
         # StarUML escribe los nombres en negritas (~15% mas anchas que Arial normal)
-        w = max(w, round(M.ancho13(nombre or '') * 1.15 + 44), 120)
+        w = max(w, round(M.ancho13(texto) * 1.15 + 44), 120)
         h = max(h, 60)
     if v.get('_type') == 'C4PersonView':
         # StarUML dibuja la cabeza (un tercio del ancho) arriba de la caja y la alarga hasta que caben sus textos
         h = max(h, round(w / 3) + 75)
+    if v.get('_type') == 'SysMLViewView':
+        # debajo del nombre StarUML escribe /viewpoint y /stakeholder, y la alarga hasta 76
+        h = max(h, 76)
     return round(w), round(h)
 
 
@@ -1287,6 +1575,193 @@ def _tipo_modelo(el):
 
 def _es_lifeline(p):
     return 'Lifeline' in p['vista']
+
+
+def _contiene(r, w):
+    return r[0] <= w[0] and r[1] <= w[1] and w[2] <= r[2] and w[3] <= r[3]
+
+
+def _encima(segs, otros):
+    """Tramos horizontales o verticales que corren encima de otro (a menos de 12 px y compartiendo mas de 8 px)."""
+    n = 0
+    for p, q in segs:
+        for a, b in otros:
+            for k in (0, 1):  # k = 0: verticales (misma x); k = 1: horizontales (misma y)
+                if p[k] == q[k] and a[k] == b[k] and abs(p[k] - a[k]) < 12:
+                    lo, hi = sorted((p[1 - k], q[1 - k]))
+                    lo2, hi2 = sorted((a[1 - k], b[1 - k]))
+                    if min(hi, hi2) - max(lo, lo2) > 8:
+                        n += 1
+    return n
+
+
+def _ruta_libre(t, h, obstaculos, otras_lineas=(), iconos=(False, False)):
+    """La mejor ruta de una linea entre los rectangulos t y h que no cruce los obstaculos: recta, en L, en Z por un
+    canal vertical u horizontal libre junto a lo que estorba, o saliendo por arriba o abajo y luego por un canal. Un
+    extremo que es icono (actor: la caja es mas ancha que el dibujo) solo se toca por arriba o por abajo: por un
+    costado la linea quedaria en el aire. Devuelve (cruces, puntos)."""
+    import staruml_programa as P
+    ct, ch = _centro_r(t), _centro_r(h)
+
+    def fuera_x(x, r):
+        return x < r[0] - 10 or x > r[2] + 10
+
+    def fuera_y(y, r):
+        return y < r[1] - 10 or y > r[3] + 10
+    lo_x, lo_y = min(t[0], h[0]), min(t[1], h[1])
+    hi_x, hi_y = max(t[2], h[2]), max(t[3], h[3])
+    junto_x = [t, h] + [o for o in obstaculos if o[3] >= lo_y - 40 and o[1] <= hi_y + 40]
+    junto_y = [t, h] + [o for o in obstaculos if o[2] >= lo_x - 40 and o[0] <= hi_x + 40]
+    xs = sorted({x for o in junto_x for x in (o[0] - 25, o[0] - 40, o[2] + 25, o[2] + 40)})
+    ys = sorted({y for o in junto_y for y in (o[1] - 25, o[1] - 40, o[3] + 25, o[3] + 40)})
+    cands = [[]]
+    if fuera_x(ct[0], h) and fuera_y(ch[1], t):
+        cands.append([(ct[0], ch[1])])
+    if fuera_x(ch[0], t) and fuera_y(ct[1], h):
+        cands.append([(ch[0], ct[1])])
+    cands += [[(x, ct[1]), (x, ch[1])] for x in xs if fuera_x(x, t) and fuera_x(x, h)]
+    cands += [[(ct[0], y), (ch[0], y)] for y in ys if fuera_y(y, t) and fuera_y(y, h)]
+    # si no hay: sale vertical, corre por un canal y entra horizontal (o al reves)
+    xs3 = sorted({x for o in junto_x for x in (o[0] - 25, o[2] + 25)})
+    ys3 = sorted({y for o in junto_y for y in (o[1] - 25, o[3] + 25)})
+    tres = [[(ct[0], y), (x, y), (x, ch[1])] for y in ys3 for x in xs3 if fuera_y(y, t) and fuera_x(x, h)]
+    tres += [[(x, ct[1]), (x, y), (ch[0], y)] for y in ys3 for x in xs3 if fuera_x(x, t) and fuera_y(y, h)]
+    dentro_t = (t[0] + 2, t[1] + 2, t[2] - 2, t[3] - 2)
+    dentro_h = (h[0] + 2, h[1] + 2, h[2] - 2, h[3] - 2)
+
+    def de_costado(p, r):
+        return abs(p[0] - r[0]) < 1 or abs(p[0] - r[2]) < 1
+    mejor = None
+    for grupo in (cands, tres):
+        for medios in grupo:
+            pts = [_junction_r(t, medios[0] if medios else ch)] + medios + \
+                [_junction_r(h, medios[-1] if medios else ct)]
+            if (iconos[0] and de_costado(pts[0], t)) or (iconos[1] and de_costado(pts[-1], h)):
+                continue
+            pts = [(round(x), round(y)) for x, y in pts]
+            tramos = list(zip(pts, pts[1:]))
+            # a menos de 8 px de una caja la linea ya parece montada en su borde
+            cruces = sum(1 for p, q in tramos for o in obstaculos if P._cruza(p, q, o, 8))
+            # sin volver a pasar por sus extremos
+            cruces += sum(1 for i, (p, q) in enumerate(tramos) if (i > 0 and P._cruza(p, q, dentro_t, 0))
+                          or (i < len(tramos) - 1 and P._cruza(p, q, dentro_h, 0)))
+            largo = sum(abs(q[0] - p[0]) + abs(q[1] - p[1]) for p, q in tramos)
+            clave = (cruces, _encima(tramos, otras_lineas), largo + 150 * len(medios))
+            if mejor is None or clave < mejor[0]:
+                mejor = (clave, pts)
+        if mejor and mejor[0][0] == 0:
+            break
+    return (mejor[0][0], mejor[1]) if mejor else (1, None)
+
+
+def _nombre_arriba(doc, v):
+    """Rectangulo del nombre (y el estereotipo) que StarUML escribe centrado arriba de una caja con otras adentro
+    (paquete, nodo, sistema, estado compuesto...): una linea que entra o sale de ella puede cruzar esa franja a un
+    lado del texto. Si no se sabe que texto lleva, la franja completa."""
+    r = _rect(v)
+    nc = doc.ids.get((v.get('nameCompartment') or {}).get('$ref')) or {}
+    textos = [x['text'] for x in nc.get('subViews', []) if x.get('visible') is not False
+              and isinstance(x.get('text'), str) and x['text'].strip()]
+    if not textos:
+        return r[0], r[1], r[2], r[1] + 35
+    # en negritas (~15% mas anchas) y con holgura por el icono que algunas llevan a un lado
+    w = max(M.ancho13(t) for t in textos) * 1.15 + 24
+    cx = (r[0] + r[2]) / 2
+    return max(r[0], cx - w / 2), r[1], min(r[2], cx + w / 2), r[1] + 35
+
+
+def _sin_cruces(doc, v, va, vb, otras):
+    """Si la linea v cruza alguna de las cajas otras (o un nombre: el de un contenedor o el que va debajo de un
+    extremo), o le llega por un costado a un icono, la cambia por la ruta libre mas corta que haya."""
+    import staruml_programa as P
+    if va is vb or not _es_caja(va) or not _es_caja(vb):
+        return
+    obst = [z for z in (_zona_nombre(va), _zona_nombre(vb)) if z] + list(otras)
+    actual = [tuple(p) for p in P._puntos(v)]
+    # un icono (actor, artefacto...) es mas angosto que su caja: si la linea le llega por un costado, queda en el aire
+    iconos = tuple(x.get('stereotypeDisplay') == 'icon' or x.get('_type') == 'UMLActorView' for x in (va, vb))
+    dibujo = _puntos_staruml(doc, v)
+    de_costado = any(ic and (abs(p[0] - r[0]) <= 1 or abs(p[0] - r[2]) <= 1) and r[1] + 1 < p[1] < r[3] - 1
+                     for ic, p, r in ((iconos[0], dibujo[0], _rect(va)), (iconos[1], dibujo[-1], _rect(vb))))
+    if not de_costado and not sum(1 for p, q in zip(actual, actual[1:]) for o in obst if P._cruza(p, q, o, 0)):
+        return
+    dg = doc.ids.get((v.get('_parent') or {}).get('$ref')) or {}
+    lineas = [x for x in dg.get('ownedViews', []) if x is not v and isinstance(x.get('points'), str)]
+    otras_l = [s for x in lineas for s in zip(P._puntos(x), P._puntos(x)[1:])]
+    # tampoco encima del borde de un carril, de un marco o de lo que contiene a un extremo
+    for x in dg.get('ownedViews', []):
+        if _es_caja(x) and (_es_zona(x) or any(y is not x and _contiene(_rect(x), _rect(y)) for y in (va, vb))):
+            r = _rect(x)
+            otras_l += [((r[0], r[1]), (r[2], r[1])), ((r[2], r[1]), (r[2], r[3])), ((r[0], r[3]), (r[2], r[3])),
+                        ((r[0], r[1]), (r[0], r[3]))]
+    cruces, pts = _ruta_libre(_rect(va), _rect(vb), obst, otras_l, iconos)
+    if cruces == 0:
+        v['points'] = ';'.join(f'{x}:{y}' for x, y in pts)
+
+
+def _lado_de_borde(doc, els, rels, vistas, padre_de, existente):
+    """Puertos y pines en el lado (derecho o izquierdo) de su caja que mira a lo que conectan, ya con todo
+    acomodado. Si se conectan con algo de adentro (delegacion), a su altura y del lado desde donde el conector llega
+    horizontal sin cruzar otra caja de adentro; si solo van hacia afuera, del lado donde esta lo que conectan."""
+    import staruml_programa as P
+    por_dueno, a_la_izquierda = {}, set()
+    for c in els:
+        dueno = padre_de(c)
+        if not _de_borde(c['_p']) or c.get('sobre') is None or dueno is None or c.get('x') is not None:
+            continue
+        vb, vd = vistas.get(c['_k']), vistas.get(dueno['_k'])
+        if not _es_caja(vb) or not _es_caja(vd):
+            continue
+        por_dueno.setdefault(dueno['_k'], []).append(c)
+        otros = []
+        for rel in rels:
+            for a_, b_ in (('desde', 'hasta'), ('hasta', 'desde')):
+                if str(rel.get(a_)) == c['_k'] and rel.get(b_) is not None:
+                    o = vistas.get(str(rel[b_])) or existente(str(rel[b_]))
+                    if _es_caja(o) and o is not vb:
+                        otros.append(o)
+        if not otros:
+            continue
+        rd = P._caja(vd)
+        cx, cy = M.centro(vb)
+        lados = {'der': rd[2], 'izq': rd[0]}
+        actual = 'der' if abs(cx - rd[2]) <= abs(cx - rd[0]) else 'izq'
+        otro_lado = 'izq' if actual == 'der' else 'der'
+        adentro = [o for o in otros if o is not vd and _contiene(rd, P._caja(o))]
+        if adentro:
+            ro = P._caja(adentro[0])
+            y = (ro[1] + ro[3]) / 2
+            # las otras cajas de adentro (sin contar las que contienen a la de destino)
+            resto = [P._caja(x) for x in vistas.values() if x is not vb and x is not vd and x is not adentro[0]
+                     and _es_caja(x) and _contiene(rd, P._caja(x)) and not _contiene(P._caja(x), ro)]
+
+            def libre(lado):
+                x1 = ro[0] if lado == 'izq' else ro[2]
+                return not any(P._cruza((lados[lado], y), (x1, y), r_, 2) for r_ in resto)
+            lado = actual if libre(actual) or not libre(otro_lado) else otro_lado
+            if lado == 'izq' and actual == 'der':
+                a_la_izquierda.add(dueno['_k'])
+        else:
+            mx = sum(M.centro(o)[0] for o in otros) / len(otros)
+            lado = 'izq' if mx < rd[0] else ('der' if mx > rd[2] else actual)
+            y = cy
+        dx, dy = round(lados[lado] - vb['width'] / 2 - vb['left']), round(y - vb['height'] / 2 - vb['top'])
+        if dx or dy:
+            _desplazar(vb, dx, dy)
+    # medir() deja a la derecha de lo de adentro el espacio para los nombres de los puertos: si todos quedaron a la
+    # izquierda, lo de adentro se corre a la derecha y el espacio queda de su lado
+    for k in a_la_izquierda:
+        vd = vistas[k]
+        rd = P._caja(vd)
+        propios = [vistas[c['_k']] for c in por_dueno[k]]
+        if any(abs(M.centro(x)[0] - rd[2]) < abs(M.centro(x)[0] - rd[0]) for x in propios):
+            continue
+        adentro = [x for x in vistas.values() if x is not vd and _es_caja(x) and _contiene(rd, P._caja(x))
+                   and not any(x is y_ for y_ in propios)]
+        reserva = max(round(M.ancho13(c.get('nombre') or '')) + 16 for c in por_dueno[k])
+        if adentro and max(P._caja(x)[2] for x in adentro) + reserva <= rd[2] - 10:
+            for x in adentro:
+                _desplazar(x, reserva, 0)
 
 
 def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas'):
@@ -1710,6 +2185,8 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
             x = el['x'] if el.get('x') is not None else destino['left'] + PAD_X
             y = el['y'] if el.get('y') is not None else destino['top'] + PAD_ARRIBA
             poner(el, x, y, destino)
+    if disposicion == 'capas':
+        _lado_de_borde(doc, els, rels, vistas, padre_de, existente)
     cajas = {k: P._caja(vistas[k]) for k in miembros}
     medios_de = P.rutas(cajas, geometrias) if geometrias else {}
     sentido = {frozenset(par): par for geo in geometrias for par in list(geo['cadenas']) + geo['mismas']}
@@ -1732,7 +2209,7 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
                 if sentido[par] != (a['_k'], b['_k']):
                     medios = medios[::-1]
         r = dib(rel['_clave'], rel.get('nombre'), desde=va and va['_id'], hasta=vb and vb['_id'], medios=medios)
-        v = doc.get(r['vista'])
+        v = doc.get(r.get('linea') or r['vista'])
         vistas[rel['_k']] = v
         lineas.append(r['vista'])
         if disposicion == 'secuencia' and v.get('_type') == 'UMLSeqMessageView':
@@ -1756,6 +2233,29 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
                     break
         if va is not None and vb is not None and isinstance(v.get('points'), str) and disposicion == 'capas':
             ext = {id(va), id(vb)}
+            if not crea_caja(rel):
+                # lo que la linea no debe cruzar: las demas cajas y sus nombres de abajo; de los contenedores de sus
+                # extremos y de los carriles, solo el nombre (la linea si cruza su borde)
+                suyos = {x['_k'] for e_ in (a, b) if e_ for x in ancestros_el(e_)[1:]}
+                # al dueno de un puerto o pin la linea no se le mete: de el estorba toda la franja de arriba
+                duenos = {padre_de(e_)['_k'] for e_ in (a, b) if e_ and e_.get('sobre') is not None and padre_de(e_)}
+                obst = []
+                for k, x in vistas.items():
+                    if k not in claves or id(x) in ext or not _es_caja(x) or claves[k].get('sobre') is not None \
+                            or claves[k] in marcos:
+                        continue
+                    r_ = P._caja(x)
+                    if _es_carril(claves[k]['_p']):
+                        obst.append((r_[0], r_[1], r_[2], r_[1] + CABECERA) if _carril_vertical(claves[k]['_p'])
+                                    else (r_[0], r_[1], r_[0] + CABECERA, r_[3]))
+                    elif k in suyos:
+                        if not _es_zona(x):
+                            obst.append((r_[0], r_[1], r_[2], r_[1] + 35) if k in duenos else _nombre_arriba(doc, x))
+                    elif not _es_zona(x):
+                        obst.append(r_)
+                        if _zona_nombre(x):
+                            obst.append(_zona_nombre(x))
+                _sin_cruces(doc, v, va, vb, obst)
             anc = set(dentro_de(a) if a else []) | set(dentro_de(b) if b else [])
             otras = [P._caja(x) for k, x in vistas.items() if k in claves and id(x) not in ext and _es_caja(x)
                      and k not in anc and claves[k].get('sobre') is None and claves[k] not in marcos
@@ -1783,6 +2283,11 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
             vistas[el['_k']] = doc.get(r['vista'])
             x0, y0, x1, y1 = x0 - m, y0 - m - 20, x1 + m, y1 + m
             m = 20
+    if disposicion == 'capas':
+        # al final, con todo dibujado: los nombres de las lineas y de los puertos y pines donde no estorben
+        doc.reindex()
+        _acomodar_etiquetas(doc, dg, [v for v in vistas.values() if isinstance(v.get('points'), str)],
+                            [vistas[c['_k']] for c in els if _de_borde(c['_p']) and _es_caja(vistas.get(c['_k']))])
     doc.reindex()
     res = {'diagrama': dg.get('name'), 'id': dg['_id'], 'cajas': len(vistas) - len(lineas), 'lineas': len(lineas),
            'vistas': {k: v['_id'] for k, v in vistas.items()}, 'lineas_que_cruzan_cajas': cruzan}

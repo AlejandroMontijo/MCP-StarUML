@@ -210,14 +210,54 @@ def test_staruml_dibuja_un_despliegue_generado(vacio, tmp_path, staruml):
     guardar_para_revision(svg, informe=rev, nombre_informe='despliegue_svg_revisar.json')
 
 
-# observaciones de svg_revisar que quedan en la galeria (etiquetas de lineas que StarUML pone sobre nombres de
-# contenedores o activaciones); la prueba evita que el acomodo empeore
-MAX_OBSERVACIONES_GALERIA = 13
+def _en_el_aire(doc, dg):
+    """Lineas que le llegan por un costado a un icono (actor, artefacto...): su caja es mas ancha que el dibujo, asi
+    que StarUML las deja terminando en el aire. Se calcula con los extremos que dibuja StarUML."""
+    import staruml_uml as U
+    res = []
+    for v in dg.get('ownedViews', []):
+        if not isinstance(v.get('points'), str):
+            continue
+        pts = U._puntos_staruml(doc, v)
+        for k, p in (('tail', pts[0]), ('head', pts[-1])):
+            x = doc.ids.get((v.get(k) or {}).get('$ref'))
+            if x is None or not U._es_caja(x) or not (x.get('stereotypeDisplay') == 'icon'
+                                                     or x.get('_type') == 'UMLActorView'):
+                continue
+            r = U._rect(x)
+            if (abs(p[0] - r[0]) <= 1 or abs(p[0] - r[2]) <= 1) and r[1] + 1 < p[1] < r[3] - 1:
+                res.append(f'{dg.get("name")}: {v["_type"]} llega por un costado a {doc.name_of(x["model"]["$ref"])}')
+    return res
+
+
+def test_staruml_dibuja_casos_de_uso_con_sistema(vacio, tmp_path, staruml):
+    """Actor arriba y casos de uso en fila dentro del sistema, con el nombre del sistema justo arriba del caso de en
+    medio: la linea hacia ese caso no cruza el nombre (lo rodea) y ninguna llega por un costado a un actor."""
+    casos = ('Confirmar renta', 'Cotizar renta', 'Registrar solicitud')
+    dg = ok(tool('mdj_diagrama_crear', archivo=vacio, tipo='casos_de_uso', nombre='Renta'))['diagrama']
+    ok(tool('mdj_diagrama_generar', archivo=vacio, diagrama=dg, elementos=[
+        {'simbolo': 'Actor', 'nombre': 'Asesor de Renta'},
+        {'simbolo': 'Use Case Subject', 'nombre': 'Sistema de renta'}]
+        + [{'simbolo': 'Use Case', 'nombre': n, 'dentro': 'Sistema de renta'} for n in casos]
+        + [{'simbolo': 'Actor', 'nombre': 'Servicio de Correo'}],
+        relaciones=[{'simbolo': 'Association', 'desde': 'Asesor de Renta', 'hasta': n} for n in casos]
+        + [{'simbolo': 'Association', 'desde': 'Confirmar renta', 'hasta': 'Servicio de Correo'}]))
+    svg = ok(tool('staruml_exportar', archivo=vacio, carpeta=str(tmp_path / 'svg'), diagrama='Renta'))['archivos'][0]
+    rev = ok(tool('svg_revisar', archivo=vacio, svg=svg, diagrama='Renta'))
+    guardar_para_revision(svg, informe=rev, nombre_informe='casos_de_uso_svg_revisar.json')
+    assert rev['n_problemas'] == 0, rev['problemas']
+    doc = M.Doc(vacio)
+    assert not _en_el_aire(doc, doc.diagram('Renta'))
+
+
+# observaciones de svg_revisar que quedan en la galeria: ninguna (lineas y nombres ya no cruzan cajas ni textos). La
+# prueba evita que el acomodo empeore
+MAX_OBSERVACIONES_GALERIA = 0
 
 
 def test_staruml_dibuja_la_galeria(tmp_path, staruml):
     """Un diagrama de cada tipo con todos los simbolos de su paleta: StarUML exporta los 28 y svg_revisar no
-    encuentra mas observaciones que las conocidas."""
+    encuentra observaciones (ninguna linea sobre una caja o un texto, ningun texto encimado)."""
     import galeria as G
     from apoyo import guardar_json, proyecto_vacio
     archivo = guardar_json(proyecto_vacio('Galeria'), str(tmp_path / 'galeria.mdj'))
@@ -235,3 +275,6 @@ def test_staruml_dibuja_la_galeria(tmp_path, staruml):
     guardar_para_revision(archivo, *[nombres[n] for n in todos], informe=informe,
                           nombre_informe='galeria_svg_revisar.json')
     assert total <= MAX_OBSERVACIONES_GALERIA, informe
+    # ninguna linea termina en el aire junto a un icono (la de robustez la acomoda staruml_robustez)
+    doc = M.Doc(archivo)
+    assert not [x for g in G.GALERIA for x in _en_el_aire(doc, doc.diagram(g['nombre']))]

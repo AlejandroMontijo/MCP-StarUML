@@ -1,6 +1,7 @@
 # Correcciones del lado de codigo: importador (paquete pedido, sin quitar nada, ambiguedad), generador (get/set del
 # modelo, tipos con precision), comparacion (BC_ frente a la clase, herencia, partial de C#, this.x de JavaScript) y
-# programa_a_diagrama (anidadas, namespaces, modulos y carpetas como paquetes, imports, campos genericos).
+# programa_a_diagrama (anidadas, namespaces, modulos y carpetas como paquetes, imports, campos genericos). Tambien las
+# clases anidadas de Python y los tipos con su tamano (char, short, byte, float, Long) de ida y vuelta.
 import os
 import shutil
 import subprocess
@@ -579,3 +580,287 @@ def test_java_de_cada_diagrama_de_clases_del_modelo_real_compila(real, tmp_path)
         probados += 1
     assert probados
     assert open(real, 'rb').read() == antes
+
+
+# --- clases anidadas de Python ---
+
+PY_ANIDADAS = {'app/__init__.py': '', 'app/arbol.py': '''
+    from enum import Enum
+    from typing import List
+
+
+    class Arbol:
+        raiz: "Arbol.Nodo"
+
+        class Nodo:
+            valor: int
+            hijos: List["Arbol.Nodo"]
+
+            class Etiqueta:
+                texto: str
+
+        class Color(Enum):
+            ROJO = 1
+            NEGRO = 2
+
+        def insertar(self, valor: int) -> None:
+            class Paso:  # local del metodo: no es parte del modelo
+                def __init__(self):
+                    self.ajeno = 0
+            self.ultimo = valor
+
+
+    class Lista:
+        cabeza: "Lista.Nodo"
+
+        class Nodo:
+            dato: str
+    '''}
+
+
+def test_python_lee_las_clases_anidadas(tmp_path):
+    r = C.escanear_codigo(fuentes(str(tmp_path / 'src'), PY_ANIDADAS), 'python')
+    assert {n: c['externa'] for n, c in r.items()} == {'Arbol': '', 'Nodo': 'Arbol', 'Etiqueta': 'Arbol.Nodo', 'Color': 'Arbol',
+                                                        'Lista': ''}
+    assert r['Color']['tipo_decl'] == 'enum' and r['Color']['literales'] == ['ROJO', 'NEGRO']
+    assert [a['nombre'] for a in r['Etiqueta']['atributos']] == ['texto']
+    # la clase local del metodo no aparece y su self.ajeno no es de Arbol
+    assert 'Paso' not in r and [a['nombre'] for a in r['Arbol']['atributos']] == ['raiz', 'ultimo']
+    # dos anidadas que se llaman igual en clases distintas: se avisa, como en Java
+    assert list(C._repetidas(r)) == ['Nodo']
+
+
+def test_python_anidadas_en_programa_a_diagrama(tmp_path):
+    r, doc = programa(tmp_path, 'py', PY_ANIDADAS, lenguaje='python')
+    assert r['clases'] == 5 and r['enumeraciones'] == 1 and r['clases_repetidas_omitidas'] == []
+    nodo = por_calificado(doc, 'app.arbol.Arbol.Nodo')
+    assert doc.ids[doc.parent[nodo['_id']]]['name'] == 'Arbol'  # dentro de su clase externa, como en StarUML
+    assert atributos(nodo) == [('valor', 'int')]
+    assert atributos(por_calificado(doc, 'app.arbol.Arbol.Nodo.Etiqueta')) == [('texto', 'str')]
+    assert atributos(por_calificado(doc, 'app.arbol.Lista.Nodo')) == [('dato', 'str')]
+    assert por_calificado(doc, 'app.arbol.Arbol.Color')['_type'] == 'UMLEnumeration'
+    assert atributos(por_calificado(doc, 'app.arbol.Arbol')) == [('ultimo', 'int')]
+    assert not clases_llamadas(doc, 'Paso')
+    assert navegaciones(doc) == {('app.arbol.Arbol', 'app.arbol.Arbol.Nodo', 'raiz', '1'),
+                                 ('app.arbol.Arbol.Nodo', 'app.arbol.Arbol.Nodo', 'hijos', '0..*'),
+                                 ('app.arbol.Lista', 'app.arbol.Lista.Nodo', 'cabeza', '1')}
+
+
+def test_python_anidadas_en_la_comparacion(tmp_path):
+    archivos = {'modelo.py': '''
+        from dataclasses import dataclass
+        from enum import Enum
+        from typing import List
+
+
+        class Pedido:
+            folio: int
+            lineas: List["Pedido.Linea"]
+            estado: "Pedido.Estado"
+
+            class Estado(Enum):
+                NUEVO = 1
+
+            @dataclass
+            class Linea:
+                cantidad: int
+                precio: float
+
+                def subtotal(self) -> float:
+                    return self.cantidad * self.precio
+        '''}
+    r, _ = programa(tmp_path, 'ped', archivos, lenguaje='python')
+    mdj, src = str(tmp_path / 'ped.mdj'), str(tmp_path / 'ped')
+    cmp = ok(tool('staruml_comparar_codigo', archivo=mdj, diagrama=r['diagramas'][0]['id'], ruta_codigo=src, lenguaje='python'))
+    assert cmp['clases_faltantes_en_codigo'] == [] and cmp['porcentaje_sincronizacion'] == 100.0, cmp['detalles_por_clase']
+    assert cmp['detalles_por_clase']['Linea']['atributos']['coincidentes'] == ['cantidad', 'precio']
+    p = os.path.join(src, 'modelo.py')
+    texto = open(p, encoding='utf-8').read()
+    assert '        precio: float\n' in texto
+    open(p, 'w', encoding='utf-8').write(texto.replace('        precio: float\n', ''))
+    cmp = ok(tool('staruml_comparar_codigo', archivo=mdj, diagrama=r['diagramas'][0]['id'], ruta_codigo=src, lenguaje='python'))
+    assert cmp['detalles_por_clase']['Linea']['atributos']['faltan_en_codigo'] == ['precio']
+
+
+# --- tipos con su tamano: char, short, byte, float y las clases envoltorio ---
+
+TIPOS = [('letra', 'char'), ('corto', 'short'), ('octeto', 'byte'), ('peso', 'float'), ('folio', 'Long'), ('cuenta', 'int'),
+         ('grande', 'long'), ('monto', 'BigDecimal'), ('precio', 'double'), ('veces', 'Integer')]
+
+
+def _clase_con_tipos(path):
+    """Medida con un atributo de cada tipo de TIPOS y convertir(c: char, f: float, b: byte, s: short): Long."""
+    doc = M.Doc(path)
+    pk, dg = doc.find('Analisis'), doc.diagram('cu_1')
+    c = {'_type': 'UMLClass', '_id': doc.new_id(), '_parent': M.ref(pk['_id']), 'name': 'Medida'}
+    c['attributes'] = [{'_type': 'UMLAttribute', '_id': doc.new_id(), '_parent': M.ref(c['_id']), 'name': n, 'type': t}
+                       for n, t in TIPOS]
+    o = {'_type': 'UMLOperation', '_id': doc.new_id(), '_parent': M.ref(c['_id']), 'name': 'convertir'}
+    o['parameters'] = [{'_type': 'UMLParameter', '_id': doc.new_id(), '_parent': M.ref(o['_id']), 'name': n, 'type': t}
+                       for n, t in (('c', 'char'), ('f', 'float'), ('b', 'byte'), ('s', 'short'))]
+    o['parameters'].append({'_type': 'UMLParameter', '_id': doc.new_id(), '_parent': M.ref(o['_id']), 'type': 'Long',
+                            'direction': 'return'})
+    c['operations'] = [o]
+    pk['ownedElements'].append(c)
+    doc.reindex()
+    M.vista_nueva(doc, dg, c, 40, 40)
+    doc.save(backup=False)
+
+
+GENERADO = {
+    'java': ('private char letra;', 'private short corto;', 'private byte octeto;', 'private float peso;', 'private Long folio;',
+             'private int cuenta;', 'private long grande;', 'private BigDecimal monto;', 'private double precio;',
+             'private Integer veces;', 'public Long convertir(char c, float f, byte b, short s)'),
+    'csharp': ('public char Letra', 'public short Corto', 'public byte Octeto', 'public float Peso', 'public long Folio',
+               'public int Cuenta', 'public long Grande', 'public decimal Monto', 'public double Precio', 'public int Veces',
+               'public long Convertir(char c, float f, byte b, short s)'),
+    'python': ('letra: Optional[str]', 'corto: Optional[int]', 'octeto: Optional[int]', 'peso: Optional[float]',
+               'folio: Optional[int]', 'monto: Optional[Decimal]', 'precio: Optional[float]',
+               'def convertir(self, c: str, f: float, b: int, s: int) -> int:'),
+    'typescript': ('letra?: string', 'corto?: number', 'octeto?: number', 'peso?: number', 'folio?: number', 'veces?: number',
+                   'convertir(c: string, f: number, b: number, s: number): number'),
+}
+# (texto generado, texto cambiado, discrepancia esperada o None si el lenguaje no distingue los dos tipos)
+CAMBIOS = {
+    'java': [('private int cuenta;', 'private long cuenta;', ('cuenta', 'int', 'long')),
+             ('private BigDecimal monto;', 'private double monto;', ('monto', 'decimal', 'double')),
+             ('private float peso;', 'private double peso;', ('peso', 'float', 'double')),
+             ('private char letra;', 'private String letra;', ('letra', 'char', 'String')),
+             ('private Long folio;', 'private long folio;', None), ('private Integer veces;', 'private int veces;', None)],
+    'csharp': [('public int Cuenta', 'public long Cuenta', ('cuenta', 'int', 'long')),
+               ('public decimal Monto', 'public double Monto', ('monto', 'decimal', 'double')),
+               ('public short Corto', 'public int Corto', ('corto', 'short', 'int')),
+               ('public long Folio', 'public long? Folio', None)],
+    'python': [('monto: Optional[Decimal]', 'monto: Optional[float]', ('monto', 'decimal', 'float')),
+               ('precio: Optional[float]', 'precio: Optional[int]', ('precio', 'double', 'int')),
+               ('cuenta: Optional[int]', 'cuenta: int', None), ('peso: Optional[float]', 'peso: float', None)],
+    'typescript': [('public letra?: string', 'public letra?: number', ('letra', 'char', 'double')),
+                   ('public cuenta?: number', 'public cuenta?: bigint', None)],
+}
+
+
+@pytest.mark.parametrize('lenguaje', ['java', 'csharp', 'python', 'typescript'])
+def test_generadores_conservan_char_short_byte_float_y_long(vacio, tmp_path, lenguaje):
+    _clase_con_tipos(vacio)
+    out = str(tmp_path / lenguaje)
+    r = ok(tool('staruml_diagrama_a_codigo', archivo=vacio, diagrama='cu_1', lenguaje=lenguaje, carpeta_salida=out))
+    archivo = os.path.join(out, r['archivos'][0])
+    texto = open(archivo, encoding='utf-8').read()
+    for linea in GENERADO[lenguaje]:
+        assert linea in texto, (lenguaje, linea, texto)
+    if lenguaje == 'java':
+        compilado = compilar_java(out)
+        assert compilado is None or compilado[0], compilado[1]
+    if lenguaje == 'python':
+        cp = subprocess.run([sys.executable, os.path.basename(archivo)], capture_output=True, text=True, cwd=out)
+        assert cp.returncode == 0, cp.stderr[-500:]
+    cmp = ok(tool('staruml_comparar_codigo', archivo=vacio, diagrama='cu_1', ruta_codigo=out, lenguaje=lenguaje))
+    assert cmp['porcentaje_sincronizacion'] == 100.0, cmp['detalles_por_clase']
+    # el codigo cambia de tipo: int contra long y double contra BigDecimal son discrepancias (Long y long no; en Python
+    # int no tiene tamano y en TypeScript todo es number)
+    for viejo, nuevo, _ in CAMBIOS[lenguaje]:
+        assert viejo in texto, viejo
+        texto = texto.replace(viejo, nuevo)
+    open(archivo, 'w', encoding='utf-8').write(texto)
+    cmp = ok(tool('staruml_comparar_codigo', archivo=vacio, diagrama='cu_1', ruta_codigo=out, lenguaje=lenguaje))
+    esperado = [{'atributo': d[0], 'tipo_uml': d[1], 'tipo_codigo': d[2]} for _, _, d in CAMBIOS[lenguaje] if d]
+    obtenido = cmp['detalles_por_clase']['Medida']['atributos']['discrepancias_tipo']
+    assert sorted(obtenido, key=str) == sorted(esperado, key=str)
+
+
+def test_tipos_del_codigo_al_modelo_y_de_vuelta(vacio, tmp_path):
+    src = fuentes(str(tmp_path / 'src'), {'Lectura.java': '''
+        package lab;
+        public class Lectura {
+            private char clave;
+            private short canal;
+            private byte nivel;
+            private float temperatura;
+            private Long id;
+            private Integer intentos;
+            public Long registrar(char c, float f) { return id; }
+        }'''})
+    ok(tool('staruml_codigo_a_diagrama', archivo=vacio, ruta_codigo=src, paquete='Analisis', diagrama='cu_1'))
+    lectura = M.Doc(vacio).find('UMLClass:Lectura')
+    assert atributos(lectura) == [('clave', 'char'), ('canal', 'short'), ('nivel', 'byte'), ('temperatura', 'float'),
+                                  ('id', 'Long'), ('intentos', 'Integer')]
+    esperados = {'java': ('private char clave;', 'private short canal;', 'private byte nivel;', 'private float temperatura;',
+                          'private Long id;', 'private Integer intentos;', 'public Long registrar(char c, float f)'),
+                 'csharp': ('public char Clave', 'public short Canal', 'public byte Nivel', 'public float Temperatura',
+                            'public long Id', 'public int Intentos', 'public long Registrar(char c, float f)')}
+    for lenguaje, lineas in esperados.items():
+        out = str(tmp_path / lenguaje)
+        r = ok(tool('staruml_diagrama_a_codigo', archivo=vacio, diagrama='cu_1', lenguaje=lenguaje, carpeta_salida=out))
+        texto = open(os.path.join(out, r['archivos'][0]), encoding='utf-8').read()
+        for linea in lineas:
+            assert linea in texto, (lenguaje, linea)
+        cmp = ok(tool('staruml_comparar_codigo', archivo=vacio, diagrama='cu_1', ruta_codigo=out, lenguaje=lenguaje))
+        assert cmp['porcentaje_sincronizacion'] == 100.0, (lenguaje, cmp['detalles_por_clase'])
+    compilado = compilar_java(str(tmp_path / 'java'))
+    assert compilado is None or compilado[0], compilado[1]
+    # del C# generado a otro modelo: los tipos siguen igual
+    otro = str(tmp_path / 'otro.mdj')
+    shutil.copy(vacio, otro)
+    ok(tool('mdj_borrar', archivo=otro, elemento='Lectura'))
+    ok(tool('staruml_codigo_a_diagrama', archivo=otro, ruta_codigo=str(tmp_path / 'csharp'), paquete='Analisis'))
+    assert atributos(M.Doc(otro).find('UMLClass:Lectura')) == [('Clave', 'char'), ('Canal', 'short'), ('Nivel', 'byte'),
+                                                              ('Temperatura', 'float'), ('Id', 'long'), ('Intentos', 'int')]
+
+    # Python: del codigo al modelo y de vuelta, sin cambiar float por otra cosa
+    py = fuentes(str(tmp_path / 'py'), {'sensor.py': '''
+        from decimal import Decimal
+
+
+        class Sensor:
+            codigo: str
+            nivel: int
+            lectura: float
+            monto: Decimal
+        '''})
+    ok(tool('staruml_codigo_a_diagrama', archivo=vacio, ruta_codigo=py, paquete='Analisis', diagrama='cu_1'))
+    assert atributos(M.Doc(vacio).find('UMLClass:Sensor')) == [('codigo', 'str'), ('nivel', 'int'), ('lectura', 'float'),
+                                                              ('monto', 'Decimal')]
+    out = str(tmp_path / 'py_gen')
+    ok(tool('staruml_diagrama_a_codigo', archivo=vacio, diagrama='cu_1', lenguaje='python', carpeta_salida=out))
+    texto = open(os.path.join(out, 'Sensor.py'), encoding='utf-8').read()
+    for linea in ('codigo: Optional[str]', 'nivel: Optional[int]', 'lectura: Optional[float]', 'monto: Optional[Decimal]'):
+        assert linea in texto, linea
+    cmp = ok(tool('staruml_comparar_codigo', archivo=vacio, diagrama='cu_1', ruta_codigo=out, lenguaje='python'))
+    assert cmp['porcentaje_sincronizacion'] == 100.0, cmp['detalles_por_clase']
+
+
+def test_sincronizar_no_cambia_lo_que_el_lenguaje_escribe_de_otra_forma(vacio, tmp_path):
+    _clase_con_tipos(vacio)
+    kt = fuentes(str(tmp_path / 'kt'), {'Medida.kt': '''
+        class Medida {
+            var grande: Long = 0
+            var precio: Double = 0.0
+            var cuenta: Long = 0
+        }'''})
+    r = ok(tool('staruml_codigo_a_diagrama', archivo=vacio, ruta_codigo=kt, paquete='Analisis', modo='sincronizar'))
+    assert r['tipos_cambiados'] == {'Medida': ['cuenta: int -> Long']}  # Long es long; Double es double
+    py = fuentes(str(tmp_path / 'py'), {'medida.py': '''
+        class Medida:
+            grande: int
+            peso: float
+            precio: float
+            monto: float
+        '''})
+    r = ok(tool('staruml_codigo_a_diagrama', archivo=vacio, ruta_codigo=py, paquete='Analisis', modo='sincronizar'))
+    # en Python int no tiene tamano y float es de doble precision; Decimal si es otro tipo
+    assert r['tipos_cambiados'] == {'Medida': ['monto: BigDecimal -> float']}
+
+
+@pytest.mark.parametrize('uml,codigo,lenguaje,igual', [
+    ('int', 'long', 'java', False), ('BigDecimal', 'double', 'java', False), ('long', 'Long', 'java', True),
+    ('int', 'Integer', 'java', True), ('char', 'String', 'java', False), ('char', 'Character', 'java', True),
+    ('float', 'double', 'csharp', False), ('short', 'Int16', 'csharp', True), ('decimal', 'decimal?', 'csharp', True),
+    ('byte', 'sbyte', 'csharp', True), ('long', 'Long?', 'kotlin', True), ('int', 'Long', 'kotlin', False),
+    ('int', 'int64', 'go', False), ('double', 'float64', 'go', True), ('float', 'float32', 'go', True),
+    ('int', 'number', 'typescript', True), ('BigDecimal', 'number', 'typescript', True), ('char', 'string', 'typescript', True),
+    ('long', 'int', 'python', True), ('double', 'float', 'python', True), ('BigDecimal', 'float', 'python', False),
+    ('BigDecimal', 'Decimal', 'python', True), ('Date', 'LocalDateTime', 'java', True), ('List<int>', 'List<Long>', 'java', False),
+    ('List<Long>', 'ArrayList<Long>', 'java', True), ('Map<String, BigDecimal>', 'Map<String, Double>', 'java', False),
+])
+def test_clave_de_tipo_por_lenguaje(uml, codigo, lenguaje, igual):
+    assert (C._clave_tipo(uml, lenguaje) == C._clave_tipo(codigo, lenguaje)) is igual
