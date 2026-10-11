@@ -122,8 +122,8 @@ En la columna **Tipo**:
 | `mdj_linea_etiqueta` | cambia | Mueve una etiqueta de una línea (multiplicidad, rol o nombre) sin tocar la línea. |
 | `mdj_nota` | cambia | Crea una nota o edita una existente; el alto se calcula según el texto. |
 | `mdj_diagrama_generar` | agrega | Dibuja un diagrama completo de cualquier tipo a partir de listas de elementos y relaciones, con acomodo por capas o de secuencia. Las líneas se rutean para no cruzar cajas; las que no lo logran se listan en `lineas_que_cruzan_cajas`. |
-| `mdj_secuencia_generar` | cambia | Rehace un diagrama de secuencia desde la lista de lifelines y mensajes: activaciones, espaciado y separación según el texto de los mensajes. Cada clave tiene su propia lifeline aunque se repita el tipo. |
-| `mdj_robustez_generar` | cambia | Dibuja el diagrama de análisis (robustez) de un caso de uso: actores a la izquierda (uno `secundario`, como un servicio de correo, recibe la flecha), pantallas en columna con su nota debajo, un control y el modelo de dominio por capas con su herencia. Reusa los elementos y asociaciones que ya existen; en una asociación reusada solo cambia lo que se pide. Si se le pasan atributos de una entidad que ya existe, la deja con esos. |
+| `mdj_secuencia_generar` | cambia | Rehace un diagrama de secuencia desde la lista de lifelines y mensajes: activaciones, espaciado y separación según el texto de los mensajes. Cada clave tiene su propia lifeline aunque se repita el tipo. Con `metodos` la revisión OOSE de la respuesta usa el mismo criterio que `mdj_validar`. |
+| `mdj_robustez_generar` | cambia | Dibuja el diagrama de análisis (robustez) de un caso de uso: actores a la izquierda (uno `secundario`, como un servicio de correo, recibe la flecha), pantallas en columna con su nota debajo, un control y el modelo de dominio por capas con su herencia. Reusa los elementos y asociaciones que ya existen; en una asociación reusada solo cambia lo que se pide. Si se le pasan atributos de una entidad que ya existe, la deja con esos. Acepta `metodos` como `mdj_validar`. |
 
 ## Seguridad al escribir
 
@@ -207,6 +207,7 @@ docs/
   reglas.md            Convenciones de modelado (la herramienta staruml_reglas las devuelve)
   catalogo.md          Cada tipo de diagrama con su notación y sus símbolos
 herramientas/          Scripts para regenerar las tablas de datos/ desde un StarUML instalado
+tests/                 Pruebas (pytest): python3 -m pytest tests
 ```
 
 ## Regenerar las tablas desde StarUML

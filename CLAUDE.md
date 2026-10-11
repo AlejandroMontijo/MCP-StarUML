@@ -35,17 +35,18 @@ MCP StarUML/
 │   ├── reglas.md          # Convenciones de modelado; la herramienta staruml_reglas lo devuelve
 │   └── catalogo.md        # Catálogo de diagramas y símbolos con secciones de UML 2.5.1 (generado)
 ├── herramientas/          # Scripts que regeneran datos/ y docs/catalogo.md, y la extensión de StarUML que dibuja la referencia
+├── tests/                 # Pruebas pytest con modelos .mdj sintéticos (apoyo.py arma los modelos; conftest.py los aísla)
 ├── README.md              # Uso: instalación, herramientas, seguridad, variables de entorno
 ├── CLAUDE.md              # Este archivo
-└── .gitignore             # Ignora scratch/, pruebas/, respaldos/, salidas/ y referencias/
+└── .gitignore             # Ignora scratch/, pruebas/, respaldos/, salidas/, referencias/ y .pytest_cache/
 ```
 
 Imports entre módulos: relativos dentro del paquete (`from . import mdj as M`); desde fuera,
 `from staruml_mcp import mdj as M`. Los respaldos van a `respaldos/` en la raíz (o `STARUML_MCP_BACKUP_DIR`).
 
-> **Sin `tests/` ni CI:** el dueño del repo decidió (2026-10-11) no versionar pruebas ni integración continua.
-> Las pruebas se hacen con scripts temporales fuera del repositorio (ver la sección 5). `pruebas/`, `respaldos/` y
-> `salidas/` son carpetas locales e ignoradas.
+> **Pruebas sí, CI no:** `tests/` se versiona (se quitó y se restauró el 2026-10-11); no hay integración continua en
+> GitHub, así que las pruebas se corren en local antes de cada PR. `pruebas/`, `respaldos/` y `salidas/` son carpetas
+> locales e ignoradas. Las pruebas que usan un modelo real se omiten si no hay `pruebas/*.mdj` ni `STARUML_MCP_MODELO_REAL`.
 
 ---
 
@@ -164,8 +165,9 @@ herramienta, para que quien la use obtenga el diagrama correcto a la primera:
 - Nueva herramienta `mdj_secuencia_revisar` (coherencia.py, solo lectura): lifelines contra el modelo, relación y
   navegación para cada mensaje, métodos del control con su número de argumentos, argumentos sin origen, replies que
   regresan a quien llamó (también en fragmentos alt/par) y clases del diagrama que no salen en ninguna secuencia.
-- Pendientes conocidos: `depende_de` en robustez exige repetir la asociación aunque exista en el modelo; la revisión OOSE
-  interna de robustez usa la regla de métodos por omisión; `mdj_diagrama_crear` de tipos que no son de clases da
+- `mdj_secuencia_generar` y `mdj_robustez_generar` aceptan `metodos` (como `mdj_validar`) para su revisión OOSE; las pruebas
+  del modelo real lo usan con `control_getset` cuando el control tiene métodos.
+- Pendientes conocidos: `depende_de` en robustez exige repetir la asociación aunque exista en el modelo; `mdj_diagrama_crear` de tipos que no son de clases da
   "ambiguo" si un caso de uso y un paquete se llaman igual; `mdj_dibujar` no ofrece la nota fuera de la paleta de clases
   (usar `mdj_nota`); las líneas del modelo de dominio pueden cruzarse entre sí (no sobre cajas).
 
@@ -174,7 +176,8 @@ herramienta, para que quien la use obtenga el diagrama correcto a la primera:
 1. **Reglas de Git:**
    - Mensajes de commit claros, concisos y sin mencionar herramientas externas no relacionadas.
    - **Claude no figura como autor ni coautor:** nada de líneas `Co-Authored-By` ni `Claude-Session` en los commits; el autor es el dueño del repositorio.
-   - Mantener `pruebas/`, `respaldos/` y `salidas/` fuera del control de versiones. No se versionan `tests/` ni CI (decisión del dueño, 2026-10-11).
+   - Mantener `pruebas/`, `respaldos/` y `salidas/` fuera del control de versiones. `tests/` sí se versiona, solo con modelos sintéticos y genéricos; no hay CI (decisión del dueño, 2026-10-11).
+   - Todo cambio de comportamiento lleva su prueba en `tests/` y la suite completa debe pasar antes del PR.
    - Los cambios entran por pull request a `main`; si cambia una herramienta, se actualiza su fila del README.
 2. **Seguridad en `.mdj`:**
    - Antes de escribir en un `.mdj`, verificar que StarUML no esté corriendo con ese archivo abierto para evitar que sobreescriba cambios (usar `forzar: true` solo si se sabe seguro).
@@ -192,16 +195,17 @@ herramienta, para que quien la use obtenga el diagrama correcto a la primera:
 
 ## 5. Comandos de Verificación Local
 
-No hay suite versionada. Antes de proponer un cambio:
+Antes de proponer un cambio:
 
 ```bash
 # 1. Errores de sintaxis, nombres sin definir e imports sin usar
 ruff check --select F,E9 .
 
-# 2. Que el servidor arranque y publique sus herramientas (respuesta JSON en una sola línea)
-printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"x","version":"1"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | python3 server.py
+# 2. Suite completa (protocolo, integridad, edición, código, render, plataforma, robustez y secuencias).
+#    Con StarUML instalado, tests/test_staruml_real.py además exporta con el CLI verdadero.
+#    Para las pruebas del modelo real: STARUML_MCP_MODELO_REAL=/ruta/a/una/copia.mdj
+python3 -m pytest tests -q
 
-# 3. Probar la herramienta cambiada con un script temporal (fuera del repo) que arranque server.py por stdio,
-#    trabaje sobre una COPIA de un .mdj, revise mdj_validar (0 duplicados, 0 colgantes) y, si dibuja algo,
-#    lo exporte con staruml_exportar y lo pase por svg_revisar.
+# 3. Que el servidor arranque y publique sus herramientas
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"x","version":"1"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | python3 server.py
 ```

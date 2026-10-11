@@ -604,6 +604,8 @@ def t_diagrama_generar(a):
                                                                 'del padre, que queda arriba',
                                 'items': obj({'hijo': S(), 'padre': S()}, ['hijo', 'padre'])},
            'lineas_control': B(description='Dibujar tambien control -> entidad (default false)'),
+           'metodos': S(enum=list(M.METODOS_OOSE), description='Que metodos admite la revision OOSE de la respuesta '
+                                                              '(como en mdj_validar; default ninguno)'),
            'salida': SALIDA, 'forzar': FORZAR},
           ['archivo', 'diagrama', 'paquete', 'actores', 'pantallas', 'control', 'entidades']),
       rw('Generar robustez', destructive=True))  # reemplaza atributos y documentacion de lo que reusa
@@ -612,7 +614,7 @@ def t_robustez_generar(a):
     r = RB.generar_robustez(doc, a['diagrama'], a['paquete'], a['actores'], a['pantallas'], a['control'],
                             a['entidades'], a.get('asociaciones') or [], bool(a.get('lineas_control')),
                             a.get('generalizaciones') or [])
-    r['oose'] = M.reglas_oose(doc)
+    r['oose'] = M.reglas_oose(doc, a.get('metodos') or 'ninguno')
     return escribir(doc, a, r)
 
 
@@ -897,12 +899,14 @@ def t_nota(a):
                                                       ['de', 'a', 'nombre'])},
            'opciones': {'type': 'object', 'description': 'y_inicio, espaciado [a,b], espaciado_izq_der [a,b], extra_flujo [a,b], '
                                                          'semilla, margen_etiqueta, separacion_minima'},
+           'metodos': S(enum=list(M.METODOS_OOSE), description='Que metodos admite la revision OOSE de la respuesta '
+                                                              '(como en mdj_validar; default ninguno)'),
            'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'diagrama', 'lifelines', 'mensajes']),
       rw('Generar secuencia', destructive=True))
 def t_sec_generar(a):
     doc = M.Doc(a['archivo'])
     info = M.generar_secuencia(doc, a['diagrama'], a['lifelines'], a['mensajes'], a.get('opciones'))
-    oose = M.reglas_oose(doc)  # antes de guardar: si fallara, no debe quedar un archivo escrito con respuesta de error
+    oose = M.reglas_oose(doc, a.get('metodos') or 'ninguno')  # antes de guardar: si fallara, no debe quedar un archivo escrito con respuesta de error
     res = escribir(doc, a, info)
     res['oose'] = oose
     return res

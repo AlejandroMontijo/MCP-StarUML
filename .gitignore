@@ -29,3 +29,6 @@ respaldos/
 salidas/
 # copia local de la especificacion OMG (no se redistribuye)
 referencias/
+
+# pytest
+.pytest_cache/
