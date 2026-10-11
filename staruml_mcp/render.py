@@ -18,7 +18,7 @@ import uuid
 import zlib
 from html import unescape
 
-from staruml_mdj import Doc, MdjError, staruml_cli, chrome_bin
+from .mdj import Doc, MdjError, staruml_cli, chrome_bin
 
 log = logging.getLogger('staruml_mcp.render')
 
@@ -746,7 +746,7 @@ def ver_visual(mdj, diagrama, salida=None, max_lado=1600, formato='png', forzar=
                 if el and el.get('_type') in ('UMLClass', 'UMLActor', 'UMLInterface'):
                     resumen_elementos.append(f"{el.get('name')} ({doc.kind(el)})")
     elif dg.get('_type') == 'UMLSequenceDiagram':
-        import staruml_mdj as M
+        from . import mdj as M
         sec = M.secuencia(doc, dg['_id'])
         resumen_elementos = [f"Lifeline: {lf}" for lf in sec.get('lifelines', [])]
 

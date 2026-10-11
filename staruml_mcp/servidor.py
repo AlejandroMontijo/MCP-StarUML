@@ -11,17 +11,16 @@ import sys
 import tempfile
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import staruml_mdj as M          # noqa: E402
-import staruml_render as R       # noqa: E402
-import staruml_compare as C      # noqa: E402
-import staruml_programa as P     # noqa: E402
-import staruml_uml as U          # noqa: E402
-import staruml_robustez as RB    # noqa: E402
+from . import mdj as M          # noqa: E402
+from . import render as R       # noqa: E402
+from . import codigo as C      # noqa: E402
+from . import programa as P     # noqa: E402
+from . import uml as U          # noqa: E402
+from . import robustez as RB    # noqa: E402
 
 VERSION = '2.2.0'
 PROTOCOLOS = ('2025-06-18', '2025-03-26', '2024-11-05')
-AQUI = os.path.dirname(os.path.abspath(__file__))
+RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # carpeta del repositorio
 NIVELES_LOG = ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
 log = logging.getLogger('staruml_mcp')
 
@@ -127,7 +126,7 @@ def t_estado(a):
       'reglas de robustez (OOSE), de secuencia, de estados y actividades y de los demas diagramas (componentes, '
       'despliegue...). Leer antes de editar.', obj({}), ro('Reglas de trabajo'))
 def t_reglas(a):
-    with open(os.path.join(AQUI, 'reglas.md'), encoding='utf-8') as f:
+    with open(os.path.join(RAIZ, 'docs', 'reglas.md'), encoding='utf-8') as f:
         return f.read()
 
 

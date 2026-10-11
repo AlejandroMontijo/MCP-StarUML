@@ -1,9 +1,9 @@
 # Genera con el StarUML instalado un .mdj de referencia que tiene, por cada diagrama, cada simbolo de su paleta.
 # Lo dibuja el propio StarUML (extension herramientas/staruml_extension/mcp-referencia, comando mcp:dibujar-todo,
 # corrida con 'StarUML exec'), asi las vistas quedan exactamente como StarUML las crea. De ese archivo
-# herramientas/extraer_plantillas.py saca plantillas_vistas.json.
+# herramientas/extraer_plantillas.py saca staruml_mcp/datos/plantillas_vistas.json.
 #
-# Uso: python herramientas/generar_referencia.py [carpeta_salida]   (por defecto pruebas/referencia, fuera de git)
+# Uso: python herramientas/generar_referencia.py [carpeta_salida]   (por defecto salidas/referencia, fuera de git)
 # Necesita StarUML instalado y cerrado. La extension se copia a la carpeta de extensiones de usuario de StarUML;
 # con --quitar-extension se borra al terminar.
 import json
@@ -17,7 +17,7 @@ RAIZ = os.path.dirname(AQUI)
 sys.path.insert(0, RAIZ)
 sys.path.insert(0, AQUI)
 
-import staruml_mdj as M  # noqa: E402
+from staruml_mcp import mdj as M  # noqa: E402
 import extraer_metamodelo as X  # noqa: E402
 
 EXTENSION = os.path.join(AQUI, 'staruml_extension', 'mcp-referencia')
@@ -64,7 +64,7 @@ def correr(cmd, limite):
 def main(argv):
     quitar = '--quitar-extension' in argv
     args = [a for a in argv[1:] if not a.startswith('--')]
-    salida = os.path.abspath(args[0] if args else os.path.join(RAIZ, 'pruebas', 'referencia'))
+    salida = os.path.abspath(args[0] if args else os.path.join(RAIZ, 'salidas', 'referencia'))
     cli = M.staruml_cli()
     if not cli:
         raise SystemExit('No encuentro StarUML (define STARUML_MCP_STARUML_BIN)')

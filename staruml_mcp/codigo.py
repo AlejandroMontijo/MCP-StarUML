@@ -1,4 +1,4 @@
-# staruml_compare.py
+# codigo.py
 # Comparador de diagramas StarUML (.mdj) contra codigo fuente (Java, Python, TypeScript/JavaScript, C#)
 # y generador bidireccional (diagrama <-> codigo).
 #  - Python se analiza con el modulo ast de la biblioteca estandar.
@@ -318,7 +318,7 @@ def extraer_elementos_diagrama(doc, nombre_diagrama: str) -> Dict[str, Any]:
                 'asociaciones': asociaciones, 'generalizaciones': generalizaciones}
 
     if tipo_dg == 'UMLSequenceDiagram':
-        import staruml_mdj as M
+        from . import mdj as M
         sec = M.secuencia(doc, dg['_id'])
         it = M.interaction_of(doc, dg)
         lifelines = []
@@ -2235,7 +2235,7 @@ def importar_codigo_a_diagrama(doc, ruta_codigo: str, paquete_nombre: str, nombr
     tienen otro y reporta, sin quitarlos, los atributos, metodos y literales que el codigo ya no tiene (tambien cuando
     la clase del codigo no tiene ninguno). Las vistas que ya tiene la clase conservan su alto y solo crecen si no les
     caben los atributos."""
-    import staruml_mdj as M
+    from . import mdj as M
     if modo not in ('agregar', 'sincronizar'):
         raise ValueError(f'modo debe ser "agregar" o "sincronizar", no "{modo}"')
     clases_codigo = escanear_codigo(ruta_codigo, lenguaje)

@@ -1,5 +1,5 @@
 # Ingenieria inversa: diagrama de clases de un programa ya hecho (Java por defecto, y los demas lenguajes que entiende
-# staruml_compare). Crea paquetes, clases, interfaces y enumeraciones con atributos y metodos (visibilidad, static,
+# codigo.py). Crea paquetes, clases, interfaces y enumeraciones con atributos y metodos (visibilidad, static,
 # abstract), herencia, interfaces implementadas, asociaciones que salen de los campos y, si se pide, dependencias.
 # Acomoda las cajas por niveles de herencia sin encimarlas y rutea las lineas para que no crucen otras cajas.
 import base64
@@ -8,9 +8,9 @@ import os
 import re
 import time
 
-import staruml_compare as C
-import staruml_mdj as M
-from staruml_mdj import MdjError, ref
+from . import codigo as C
+from . import mdj as M
+from .mdj import MdjError, ref
 
 LIMITE_UN_DIAGRAMA = 60  # mas clases que esto (en varios paquetes): un diagrama por paquete si no se pide otra cosa
 SIMBOLO = {'public': '+', 'private': '-', 'protected': '#', 'package': '~', 'internal': '~'}

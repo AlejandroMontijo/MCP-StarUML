@@ -1,4 +1,4 @@
-# Saca plantillas_vistas.json del .mdj de referencia que dibujo StarUML (herramientas/generar_referencia.py).
+# Saca staruml_mcp/datos/plantillas_vistas.json del .mdj de referencia que dibujo StarUML (herramientas/generar_referencia.py).
 # Por cada simbolo de cada paleta guarda exactamente lo que StarUML creo al dibujarlo: los elementos de modelo y las
 # vistas (con sus subvistas, etiquetas y compartimentos), con los ids cambiados por marcadores:
 #   @0, @1...         objetos creados por el simbolo
@@ -7,9 +7,9 @@
 #   @cola, @cabeza    vistas a las que se conecto (lineas) o sobre las que se puso (puertos, pines, regiones...)
 #   @cola_m, @cabeza_m  sus elementos de modelo
 #   @ext              cualquier otra referencia: se guarda tipo y nombre para resolverla en el archivo destino
-# staruml_uml.dibujar() instancia una plantilla en cualquier diagrama del mismo tipo.
+# staruml_mcp/uml.py (dibujar) instancia una plantilla en cualquier diagrama del mismo tipo.
 #
-# Uso: python herramientas/extraer_plantillas.py [carpeta_referencia]   (por defecto pruebas/referencia)
+# Uso: python herramientas/extraer_plantillas.py [carpeta_referencia]   (por defecto salidas/referencia)
 import copy
 import json
 import os
@@ -19,9 +19,9 @@ AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.dirname(AQUI)
 sys.path.insert(0, RAIZ)
 
-import staruml_mdj as M  # noqa: E402
+from staruml_mcp import mdj as M  # noqa: E402
 
-SALIDA = os.path.join(RAIZ, 'plantillas_vistas.json')
+SALIDA = os.path.join(RAIZ, 'staruml_mcp', 'datos', 'plantillas_vistas.json')
 
 
 def campo_en_padre(padre, obj):
@@ -187,7 +187,7 @@ def plantilla(doc, e, ajenos, otros):
 
 
 def main(argv):
-    carpeta = os.path.abspath(argv[1] if len(argv) > 1 else os.path.join(RAIZ, 'pruebas', 'referencia'))
+    carpeta = os.path.abspath(argv[1] if len(argv) > 1 else os.path.join(RAIZ, 'salidas', 'referencia'))
     doc = M.Doc(os.path.join(carpeta, 'referencia.mdj'))
     with open(os.path.join(carpeta, 'reporte.json'), encoding='utf-8') as f:
         reporte = json.load(f)
@@ -218,7 +218,7 @@ def main(argv):
         else:
             plantillas.setdefault(e['diagrama'], {})[clave] = p
     salida = {'staruml': None, 'diagramas': diagramas, 'plantillas': plantillas, 'no_dibujables': omitidos}
-    with open(os.path.join(RAIZ, 'staruml_metamodelo.json'), encoding='utf-8') as f:
+    with open(os.path.join(RAIZ, 'staruml_mcp', 'datos', 'metamodelo.json'), encoding='utf-8') as f:
         salida['staruml'] = json.load(f).get('staruml')
     with open(SALIDA, 'w', encoding='utf-8', newline='\n') as f:
         json.dump(salida, f, ensure_ascii=False, indent='\t', sort_keys=True)

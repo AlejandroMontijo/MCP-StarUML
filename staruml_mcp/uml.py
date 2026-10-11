@@ -1,6 +1,6 @@
 # Motor generico para todos los diagramas y simbolos de StarUML (UML 2.5 y las extensiones: BPMN, SysML, C4, ERD,
 # flowchart, DFD, wireframe, mindmap, AWS y GCP). Se apoya en dos tablas que salen del StarUML instalado:
-#  - staruml_metamodelo.json (herramientas/extraer_metamodelo.py): tipos, herencia, atributos, vistas por diagrama y
+#  - datos/metamodelo.json (herramientas/extraer_metamodelo.py): tipos, herencia, atributos, vistas por diagrama y
 #    la paleta de cada diagrama.
 #  - plantillas_vistas.json (herramientas/generar_referencia.py + extraer_plantillas.py): lo que StarUML crea al dibujar
 #    cada simbolo de cada paleta y al crear cada tipo de diagrama, con los ids cambiados por marcadores.
@@ -14,13 +14,13 @@ import os
 import re
 import unicodedata
 
-import staruml_mdj as M
-from staruml_mdj import MdjError, ref
+from . import mdj as M
+from .mdj import MdjError, ref
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _CACHE = {}
 
-# nombres cortos de diagrama (los tres primeros los resuelve staruml_mdj.crear_diagrama como siempre)
+# nombres cortos de diagrama (los tres primeros los resuelve mdj.crear_diagrama como siempre)
 ALIAS_DIAGRAMA = {
     'clases': 'UMLClassDiagram', 'casos_de_uso': 'UMLUseCaseDiagram', 'secuencia': 'UMLSequenceDiagram',
     'paquetes': 'UMLPackageDiagram', 'objetos': 'UMLObjectDiagram', 'estructura_compuesta': 'UMLCompositeStructureDiagram',
@@ -41,7 +41,7 @@ ALIAS_DIAGRAMA = {
 
 def _tabla(nombre):
     if nombre not in _CACHE:
-        ruta = os.path.join(HERE, nombre)
+        ruta = os.path.join(HERE, 'datos', nombre)
         if not os.path.exists(ruta):
             raise MdjError(f'Falta {nombre}; se genera con los scripts de herramientas/')
         with open(ruta, encoding='utf-8') as f:
@@ -50,7 +50,7 @@ def _tabla(nombre):
 
 
 def metamodelo():
-    return _tabla('staruml_metamodelo.json')
+    return _tabla('metamodelo.json')
 
 
 def plantillas():
@@ -870,7 +870,7 @@ def _acomodar_etiquetas(doc, dg, lineas, bordes):
     """Las etiquetas de las lineas dadas (nombre y estereotipo) y de los puertos o pines dados (su nombre) que
     StarUML pondria sobre una linea, una caja u otro texto se mueven (alpha y distance) al lugar libre mas cercano.
     Se calcula donde las dibuja StarUML: no usa left/top sino la linea (o la caja) y alpha y distance."""
-    import staruml_programa as P
+    from . import programa as P
     cajas = [v for v in dg.get('ownedViews', []) if _es_caja(v) and v.get('visible') is not False]
     rects = {id(v): _rect(v) for v in cajas}
     segs = []  # (p, q, vista de la que es el borde o None si es una linea)
@@ -995,7 +995,7 @@ def _acomodar_lo_que_crea(doc, nuevos, v):
     otras_cajas = [o for o in dg.get('ownedViews', []) if _es_caja(o) and id(o) not in propias
                    and not o.get('_type', '').endswith('FrameView')]
 
-    import staruml_programa as P
+    from . import programa as P
     propias_l = {id(doc.ids[i]) for i in nuevos.values() if doc.ids.get(i) is not None}
     tramos = [(a, b) for o in dg.get('ownedViews', []) if es_linea(o.get('_type', '')) and id(o) not in propias_l
               and isinstance(o.get('points'), str)
@@ -1600,7 +1600,7 @@ def _ruta_libre(t, h, obstaculos, otras_lineas=(), iconos=(False, False)):
     canal vertical u horizontal libre junto a lo que estorba, o saliendo por arriba o abajo y luego por un canal. Un
     extremo que es icono (actor: la caja es mas ancha que el dibujo) solo se toca por arriba o por abajo: por un
     costado la linea quedaria en el aire. Devuelve (cruces, puntos)."""
-    import staruml_programa as P
+    from . import programa as P
     ct, ch = _centro_r(t), _centro_r(h)
 
     def fuera_x(x, r):
@@ -1673,7 +1673,7 @@ def _nombre_arriba(doc, v):
 def _sin_cruces(doc, v, va, vb, otras):
     """Si la linea v cruza alguna de las cajas otras (o un nombre: el de un contenedor o el que va debajo de un
     extremo), o le llega por un costado a un icono, la cambia por la ruta libre mas corta que haya."""
-    import staruml_programa as P
+    from . import programa as P
     if va is vb or not _es_caja(va) or not _es_caja(vb):
         return
     obst = [z for z in (_zona_nombre(va), _zona_nombre(vb)) if z] + list(otras)
@@ -1703,7 +1703,7 @@ def _lado_de_borde(doc, els, rels, vistas, padre_de, existente):
     """Puertos y pines en el lado (derecho o izquierdo) de su caja que mira a lo que conectan, ya con todo
     acomodado. Si se conectan con algo de adentro (delegacion), a su altura y del lado desde donde el conector llega
     horizontal sin cruzar otra caja de adentro; si solo van hacia afuera, del lado donde esta lo que conectan."""
-    import staruml_programa as P
+    from . import programa as P
     por_dueno, a_la_izquierda = {}, set()
     for c in els:
         dueno = padre_de(c)
@@ -1776,7 +1776,7 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
     fila (lifelines) y las relaciones (mensajes) en orden, cada una mas abajo.
     Avisa cuando una linea sale de un elemento anidado hacia afuera de su contenedor (atraviesa el contenedor) y cuando
     cruza cajas que no son sus extremos."""
-    import staruml_programa as P
+    from . import programa as P
     if disposicion not in ('capas', 'secuencia'):
         raise MdjError('disposicion debe ser capas o secuencia')
     dg = doc.diagram(diagrama)

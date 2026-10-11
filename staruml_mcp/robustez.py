@@ -2,7 +2,7 @@
 #   actor | pantallas (boundary) en columna, cada una con su nota opcional | un control | modelo de dominio
 # Actor -> pantalla y pantalla -> control van rectas con flecha; si la recta tocaria otra caja o una nota, entra a la
 # pantalla con un tramo horizontal (un solo codo). Las entidades se acomodan como modelo de dominio por capas
-# (staruml_programa.acomodar), siguiendo la navegabilidad de sus asociaciones y la herencia, y sus lineas se rutean
+# (programa.acomodar), siguiendo la navegabilidad de sus asociaciones y la herencia, y sus lineas se rutean
 # aqui: cada linea llega por arriba o por abajo de la caja en su propio puerto, separado de los demas lo que piden sus
 # etiquetas (multiplicidad y rol), corre por su carril entre filas (en un orden que evita cruces cuando se puede) y
 # cruza las filas intermedias por su hueco; se guarda rectilinea para que StarUML la meta derecha a la caja. Las cajas
@@ -11,9 +11,9 @@
 import math
 import random
 
-import staruml_mdj as M
-import staruml_programa as P
-from staruml_mdj import MdjError, ref
+from . import mdj as M
+from . import programa as P
+from .mdj import MdjError, ref
 
 ANCHO_NOTA = 230          # ancho de una nota larga (mas si una palabra no cabe)
 ALTO_PANTALLA, ALTO_ACTOR = 65, 80
@@ -307,7 +307,7 @@ def _componentes(nombres, aristas):
 
 
 def _acomodo(nombres, tam, aristas):
-    """Cada componente conexa por capas (staruml_programa.acomodar) desde (0, 0); las entidades sueltas van en filas
+    """Cada componente conexa por capas (programa.acomodar) desde (0, 0); las entidades sueltas van en filas
     aparte (cada fila es un grupo de una sola capa)."""
     comps, sueltas = _componentes(nombres, aristas)
     grupos = []

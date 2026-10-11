@@ -45,9 +45,11 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
   existe la asociación; boundary -> actor externo (p. ej. un servicio de correo).
 - Control -> actor no es válido: se pone una boundary en medio.
 - Una boundary no habla con otra boundary ni con una entity.
-- Boundary y control sin atributos ni métodos. En análisis ninguna clase lleva métodos: `mdj_validar`
+- Boundary y control sin atributos. Por omisión, en análisis ninguna clase lleva métodos: `mdj_validar`
   lo revisa en las clases con estereotipo de robustez (boundary, control, entity) y en los actores; las
-  clases de diseño, sin esos estereotipos, sí llevan métodos.
+  clases de diseño, sin esos estereotipos, sí llevan métodos. Si el equipo pone métodos en el análisis,
+  se valida con `metodos: "control_getset"`: el control puede tener métodos, cada entity solo
+  `getX`/`setX`/`isX` de sus propios atributos y las boundary ninguno.
 - Una sola notación (la de íconos) en todo el proyecto. `mdj_validar` avisa de las vistas de
   robustez que no la usan, de los estereotipos guardados como texto y de las cajas encimadas.
 - Cada caso de uso se analiza en un paquete con su mismo nombre (sin importar acentos ni mayúsculas).
@@ -56,7 +58,7 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
   atiende a un actor que no participa en el caso de uso (la herencia entre actores cuenta) y qué
   casos de uso aún no tienen paquete.
 - Disposición del diagrama de análisis (`mdj_robustez_generar` la hace sola): actor a la izquierda,
-  las pantallas (boundary) en columna con su nota debajo o al lado, el control a su derecha y a la
+  las pantallas (boundary) en columna con su nota debajo, el control a su derecha y a la
   derecha el modelo de dominio, por capas según la navegabilidad. Actor → pantalla y pantalla →
   control son rectas con flecha; entre entidades, flecha de navegación, multiplicidad y rol en cada
   asociación. Las líneas control → entidad no se dibujan (con `lineas_control` sí).
@@ -117,7 +119,7 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
 ## Cualquier diagrama: componentes, despliegue y los demás
 
 - Los 28 tipos de diagrama de StarUML y los símbolos de sus paletas están en
-  `uml_catalogo.md` (y en `mdj_catalogo`). Un símbolo se dibuja con `mdj_dibujar` por
+  `docs/catalogo.md` (y en `mdj_catalogo`). Un símbolo se dibuja con `mdj_dibujar` por
   su nombre en la paleta (`Node`, `Artifact`, `Deployment`...), y el archivo queda como
   si se hubiera dibujado en StarUML: se copia lo que StarUML crea para ese símbolo.
 - Cada diagrama vive donde StarUML lo pone: estados dentro de su máquina de estados
@@ -129,7 +131,7 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
   una partición está en la partición. `mdj_diagrama_generar` lo hace con `dentro`.
 - `sobre` es para lo que va pegado a otra vista (puertos, pines, nodos de expansión,
   eventos de borde, invariantes de estado, auto-mensajes y auto-transiciones, lo de un
-  diagrama de tiempos, restricciones de tiempo); la columna Notas de `uml_catalogo.md` dice
+  diagrama de tiempos, restricciones de tiempo); la columna Notas de `docs/catalogo.md` dice
   sobre qué va cada símbolo. Las regiones de un estado se hacen con `Orthogonal State` y
   las particiones con `Swimlane (...)`, con lo de adentro en `dentro`.
 - `mdj_elemento_crear` y `mdj_relacion_crear` guardan cada cosa donde la guarda StarUML:

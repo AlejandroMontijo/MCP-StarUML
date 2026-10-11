@@ -1,6 +1,6 @@
-# Escribe uml_catalogo.md: por cada diagrama, para que sirve, su notacion, la seccion de la especificacion UML 2.5.1
+# Escribe docs/catalogo.md: por cada diagrama, para que sirve, su notacion, la seccion de la especificacion UML 2.5.1
 # (OMG, formal/17-12-05) donde se define y la paleta real de StarUML con lo que el servidor sabe dibujar.
-# Las descripciones son propias; la paleta y las plantillas salen de staruml_metamodelo.json y plantillas_vistas.json,
+# Las descripciones son propias; la paleta y las plantillas salen de staruml_mcp/datos/metamodelo.json y plantillas_vistas.json,
 # asi que el catalogo siempre coincide con lo que la herramienta hace.
 #
 # Uso: python herramientas/generar_catalogo.py
@@ -11,7 +11,7 @@ AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.dirname(AQUI)
 sys.path.insert(0, RAIZ)
 
-import staruml_uml as U  # noqa: E402
+from staruml_mcp import uml as U  # noqa: E402
 
 SPEC = 'https://www.omg.org/spec/UML/2.5.1/PDF'
 
@@ -138,9 +138,9 @@ def main():
         if nd:
             out += ['', 'Sin plantilla (StarUML no los dibuja sin interaccion del usuario en este diagrama):', '']
             out += [f'- {o["simbolo"].split("|")[0]}: {o["motivo"]}' for o in nd]
-    with open(os.path.join(RAIZ, 'uml_catalogo.md'), 'w', encoding='utf-8', newline='\n') as f:
+    with open(os.path.join(RAIZ, 'docs', 'catalogo.md'), 'w', encoding='utf-8', newline='\n') as f:
         f.write('\n'.join(out) + '\n')
-    print(f'uml_catalogo.md: {len(orden)} diagramas')
+    print(f'docs/catalogo.md: {len(orden)} diagramas')
 
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
 # Biblioteca para leer, validar y editar archivos .mdj de StarUML sin abrir la aplicacion.
-# Reglas de trabajo que respeta (ver reglas.md):
+# Reglas de trabajo que respeta (ver docs/reglas.md):
 #  - Guarda siempre con json.dump(d, f, ensure_ascii=False, indent='\t'), igual que StarUML.
 #  - Respalda antes de escribir y no escribe si la aplicacion de StarUML esta abierta (o si no se puede saber).
 #  - No escribe un cambio que deje el archivo peor de lo que estaba: ids duplicados, referencias colgantes,
@@ -22,16 +22,17 @@ import unicodedata
 from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BACKUP_DIR = os.environ.get('STARUML_MCP_BACKUP_DIR', os.path.join(HERE, 'respaldos'))
+RAIZ = os.path.dirname(HERE)  # carpeta del repositorio
+BACKUP_DIR = os.environ.get('STARUML_MCP_BACKUP_DIR', os.path.join(RAIZ, 'respaldos'))
 
 _TIPOS = {}
 
 
 def tipos_staruml():
-    """Tipos del metamodelo de StarUML (staruml_metamodelo.json): {tipo: {'super': ...}}. Vacio si no esta."""
+    """Tipos del metamodelo de StarUML (datos/metamodelo.json): {tipo: {'super': ...}}. Vacio si no esta."""
     if 'tipos' not in _TIPOS:
         try:
-            with open(os.path.join(HERE, 'staruml_metamodelo.json'), encoding='utf-8') as f:
+            with open(os.path.join(HERE, 'datos', 'metamodelo.json'), encoding='utf-8') as f:
                 _TIPOS['tipos'] = json.load(f)['tipos']
         except (OSError, ValueError, KeyError):
             _TIPOS['tipos'] = {}

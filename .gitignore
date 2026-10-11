@@ -22,13 +22,10 @@ ENV/
 *.swp
 *.swo
 
-# Salidas temporales y pruebas
+# Salidas locales
 scratch/
 pruebas/
 respaldos/
+salidas/
 # copia local de la especificacion OMG (no se redistribuye)
 referencias/
-
-
-# pytest
-.pytest_cache/

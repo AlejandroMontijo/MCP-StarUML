@@ -1,4 +1,4 @@
-# Extrae del StarUML instalado la tabla de metamodelo que usa el servidor (staruml_metamodelo.json).
+# Extrae del StarUML instalado la tabla de metamodelo que usa el servidor (staruml_mcp/datos/metamodelo.json).
 # StarUML trae su metamodelo dentro de resources/app.asar: un metamodel.json por extension (uml, bpmn, sysml...)
 # y uno del nucleo (Element, Model, View...). Aqui solo se guarda lo que hace falta para crear y validar archivos:
 # herencia, si el tipo es abstracto, sus atributos (nombre, kind, type), la vista de cada elemento, las vistas que
@@ -15,9 +15,9 @@ AQUI = os.path.dirname(os.path.abspath(__file__))
 RAIZ = os.path.dirname(AQUI)
 sys.path.insert(0, RAIZ)
 
-import staruml_mdj as M  # noqa: E402
+from staruml_mcp import mdj as M  # noqa: E402
 
-SALIDA = os.path.join(RAIZ, 'staruml_metamodelo.json')
+SALIDA = os.path.join(RAIZ, 'staruml_mcp', 'datos', 'metamodelo.json')
 
 
 def ruta_asar(arg=None):
