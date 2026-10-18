@@ -258,3 +258,63 @@ def test_geometria_y_busqueda_genericas(vacio):
     doc = M.Doc(vacio)
     assert doc.find('ERDEntity:Cliente')['_id'] == a['elemento']
     assert any(d['tipo'] == 'ERDDiagram' for d in ok(tool('mdj_resumen', archivo=vacio))['diagramas'])
+
+
+@pytest.mark.parametrize('tipo', ['actividades', 'estados', 'componentes', 'clases', 'casos_de_uso'])
+def test_diagrama_dentro_de_un_nombre_que_comparten_caso_de_uso_y_paquete(vacio, tipo):
+    """Un caso de uso y un paquete con el mismo nombre (lo comun: el paquete de analisis se llama como el caso de uso):
+    el diagrama va al paquete, y con Tipo:Nombre al caso de uso si StarUML lo admite."""
+    doc = M.Doc(vacio)
+    raiz = M.modelo_raiz(doc)
+    for t in ('UMLUseCase', 'UMLPackage'):
+        raiz['ownedElements'].append({'_type': t, '_id': doc.new_id(), '_parent': M.ref(raiz['_id']), 'name': 'Gestionar pedido'})
+    doc.reindex()
+    doc.save(backup=False)
+    r = ok(tool('mdj_diagrama_crear', archivo=vacio, tipo=tipo, nombre=f'D {tipo}', dentro_de='Gestionar pedido'))
+    doc = M.Doc(vacio)
+    i = doc.parent[r['diagrama']]
+    while doc.ids[i]['_type'] not in ('UMLPackage', 'UMLUseCase', 'UMLModel'):
+        i = doc.parent[i]  # actividad, maquina de estados... que StarUML crea junto con el diagrama
+    assert (doc.ids[i]['_type'], doc.ids[i]['name']) == ('UMLPackage', 'Gestionar pedido')
+    if tipo in ('actividades', 'estados', 'componentes'):
+        assert any('UMLUseCase:Gestionar pedido' in a for a in r['avisos'])
+    assert ids_integros(vacio)
+
+
+def test_diagrama_dentro_de_un_nombre_ambiguo_sin_paquete_sigue_siendo_error(vacio):
+    doc = M.Doc(vacio)
+    raiz = M.modelo_raiz(doc)
+    for _ in range(2):
+        raiz['ownedElements'].append({'_type': 'UMLUseCase', '_id': doc.new_id(), '_parent': M.ref(raiz['_id']), 'name': 'Repetido'})
+    doc.reindex()
+    doc.save(backup=False)
+    assert 'ambiguo' in tool('mdj_diagrama_crear', archivo=vacio, tipo='actividades', nombre='D', dentro_de='Repetido')['error']
+
+
+@pytest.mark.parametrize('tipo', ['actividades', 'estados', 'despliegue', 'bpmn', 'clases'])
+def test_nota_y_enlace_de_nota_en_cualquier_diagrama(vacio, tipo):
+    """Note y Note Link son de la paleta comun de StarUML: mdj_dibujar los pone en cualquier diagrama."""
+    dg = ok(tool('mdj_diagrama_crear', archivo=vacio, tipo=tipo, nombre=f'D {tipo}'))['diagrama']
+    simbolo = {'actividades': 'Action', 'estados': 'Simple State', 'despliegue': 'Node', 'bpmn': 'Task', 'clases': 'Class'}[tipo]
+    caja = ok(tool('mdj_dibujar', archivo=vacio, diagrama=dg, simbolo=simbolo, nombre='Algo', x=300, y=80))
+    nota = ok(tool('mdj_dibujar', archivo=vacio, diagrama=dg, simbolo='Nota', nombre='Comentario sobre algo', x=40, y=80))
+    assert nota['vista_tipo'] == 'UMLNoteView' and nota['elemento'] is None
+    enlace = ok(tool('mdj_dibujar', archivo=vacio, diagrama=dg, simbolo='Note Link', desde=caja['vista'], hasta=nota['vista']))
+    doc = M.Doc(vacio)
+    d = doc.diagram(dg)
+    v = next(x for x in d['ownedViews'] if x['_id'] == enlace['vista'])
+    assert v['_type'] == 'UMLNoteLinkView' and v['tail']['$ref'] == nota['vista'] and v['head']['$ref'] == caja['vista']
+    assert next(x for x in d['ownedViews'] if x['_id'] == nota['vista'])['text'] == 'Comentario sobre algo'
+    val = ok(tool('mdj_validar', archivo=vacio))
+    assert val['n_colgantes'] == val['n_duplicados'] == 0
+    assert not [p for p in val.get('metamodelo', []) if 'Note' in str(p)], val.get('metamodelo')  # vistas validas en StarUML
+    assert ids_integros(vacio)
+
+
+def test_catalogo_lista_los_simbolos_comunes_y_el_enlace_exige_una_nota(vacio):
+    assert [c['simbolo'] for c in ok(tool('mdj_catalogo', diagrama='actividades'))['comunes']] == ['Note', 'Note Link']
+    dg = ok(tool('mdj_diagrama_crear', archivo=vacio, tipo='actividades', nombre='D'))['diagrama']
+    a = ok(tool('mdj_dibujar', archivo=vacio, diagrama=dg, simbolo='Action', nombre='A', x=40, y=40))
+    b = ok(tool('mdj_dibujar', archivo=vacio, diagrama=dg, simbolo='Action', nombre='B', x=300, y=40))
+    assert 'debe ser una nota' in tool('mdj_dibujar', archivo=vacio, diagrama=dg, simbolo='Note Link', desde=a['vista'], hasta=b['vista'])['error']
+    assert 'indica desde' in tool('mdj_dibujar', archivo=vacio, diagrama=dg, simbolo='Note Link', desde=a['vista'])['error']

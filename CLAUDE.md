@@ -169,9 +169,11 @@ herramienta, para que quien la use obtenga el diagrama correcto a la primera:
   regresan a quien llamó (también en fragmentos alt/par) y clases del diagrama que no salen en ninguna secuencia.
 - `mdj_secuencia_generar` y `mdj_robustez_generar` aceptan `metodos` (como `mdj_validar`) para su revisión OOSE; las pruebas
   del modelo real lo usan con `control_getset` cuando el control tiene métodos.
-- Pendientes conocidos: `depende_de` en robustez exige repetir la asociación aunque exista en el modelo; `mdj_diagrama_crear` de tipos que no son de clases da
-  "ambiguo" si un caso de uso y un paquete se llaman igual; `mdj_dibujar` no ofrece la nota fuera de la paleta de clases
-  (usar `mdj_nota`); las líneas del modelo de dominio pueden cruzarse entre sí (no sobre cajas).
+- Resuelto el 2026-10-18: `depende_de` en robustez usa la asociación que ya existe en el modelo (no hay que repetirla);
+  `mdj_diagrama_crear` con un nombre que comparten un caso de uso y un paquete va al tipo que exige el diagrama o al
+  paquete, y avisa cómo pedir el otro (`Tipo:Nombre`); `mdj_dibujar` dibuja Note y Note Link (paleta común) en cualquier
+  diagrama y `mdj_catalogo` los lista en `comunes`.
+- Pendiente conocido: las líneas del modelo de dominio pueden cruzarse entre sí (no sobre cajas).
 
 ## 4. Convenciones y Reglas Inquebrantables
 

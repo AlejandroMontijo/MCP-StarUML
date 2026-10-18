@@ -34,7 +34,8 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
   solo sus etiquetas (`mdj_linea_etiqueta`, con `alpha` y `distance`).
 - Nada de espaciados idénticos ni alineaciones perfectas repetidas: se ve hecho por
   máquina. Variar un poco posiciones y separaciones.
-- Notas: cada renglón de Arial 11 ocupa 11 px. `mdj_nota` calcula el alto solo.
+- Notas: cada renglón de Arial 11 ocupa 11 px. `mdj_nota` calcula el alto solo. Note y Note Link (de la nota a lo que
+  comenta) son de la paleta común: `mdj_dibujar` los pone en cualquier tipo de diagrama.
 - Revisar siempre con `svg_revisar` después de exportar: líneas que cruzan notas o
   cajas, líneas sobre etiquetas, etiquetas encimadas y texto que se sale de las notas.
 

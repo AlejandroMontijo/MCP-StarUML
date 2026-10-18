@@ -152,10 +152,8 @@ def _validar(actores, pantallas, control, entidades, asociaciones, generalizacio
         if ent[padre].get('depende_de'):
             raise MdjError(f'{e["nombre"]}: depende de {padre}, que tambien es dependiente; '
                            'debe depender de una entidad que use el control')
-        # sin una asociacion entre las dos nada alcanzaria a la dependiente (el control no se une a ella)
-        if not any({a['desde'], a['hasta']} == {e['nombre'], padre} for a in asociaciones):
-            raise MdjError(f'{e["nombre"]} depende de {padre}, pero no hay una asociacion entre las dos: agregala '
-                           'en asociaciones (es el camino por el que se llega a ella)')
+        # la asociacion entre las dos (el camino por el que se llega a la dependiente) puede venir en la lista o ya
+        # existir en el modelo: eso se revisa en generar_robustez, cuando ya se conocen los elementos
     pares = []
     for g in generalizaciones:
         h, p = g.get('hijo'), g.get('padre')
@@ -773,8 +771,8 @@ def generar_robustez(doc, diagrama, paquete, actores, pantallas, control, entida
     pantallas: [{nombre, documentacion?, nota?}] de arriba abajo; nota: texto de una nota debajo de la pantalla
     control: {nombre, documentacion?}
     entidades: [{nombre, atributos?, documentacion?, depende_de?}]  (depende_de: entidad que solo se alcanza desde
-               otra por una asociacion entre las dos; queda debajo de ella y con lineas_control el control no se une
-               a ella)
+               otra por una asociacion entre las dos, que puede venir en asociaciones o ya existir en el modelo;
+               queda debajo de ella y con lineas_control el control no se une a ella)
     asociaciones: [{desde, hasta, mult_desde?, mult_hacia?, rol_desde?, rol_hacia?, navegable?}] entre entidades;
                navegable 'hacia' por defecto (flecha de desde a hasta); el extremo que navega queda arriba.
                desde == hasta es una asociacion reflexiva.
@@ -808,6 +806,21 @@ def generar_robustez(doc, diagrama, paquete, actores, pantallas, control, entida
     for n, el in els.items():
         if doc.views_of(el['_id'], dg):
             raise MdjError(f'{n} ya esta dibujado en {dg.get("name")}: usa un diagrama vacio')
+
+    # una entidad dependiente necesita una asociacion con la entidad de la que depende (el control no se une a ella).
+    # Si no viene en la lista pero ya existe en el modelo, se usa esa tal como esta (no hay que repetirla)
+    for e in entidades:
+        padre = e.get('depende_de')
+        if not padre or any({a['desde'], a['hasta']} == {e['nombre'], padre} for a in asociaciones):
+            continue
+        ya = any(o and o.get('_type') == 'UMLAssociation' and
+                 {(o.get('end1') or {}).get('reference', {}).get('$ref'),
+                  (o.get('end2') or {}).get('reference', {}).get('$ref')} == {els[e['nombre']]['_id'], els[padre]['_id']}
+                 for o in doc.ids.values())
+        if not ya:
+            raise MdjError(f'{e["nombre"]} depende de {padre}, pero no hay una asociacion entre las dos: agregala '
+                           'en asociaciones (es el camino por el que se llega a ella)')
+        asociaciones.append({'desde': padre, 'hasta': e['nombre']})
 
     # asociaciones entre entidades: se resuelven antes de acomodar, porque una que ya existe se dibuja con lo que
     # tiene en el modelo. Entre varias del mismo par escogen primero las que piden roles y luego las que piden mas

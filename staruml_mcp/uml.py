@@ -177,7 +177,11 @@ def catalogo(diagrama=None):
         simbolos.append(e)
     nd = [{'simbolo': o['simbolo'].split('|')[0], 'motivo': o['motivo']} for o in pl.get('no_dibujables', [])
           if o['diagrama'] == t]
-    return {'tipo': t, 'alias': inv.get(t), 'simbolos': simbolos, 'sin_plantilla': nd}
+    comunes = [{'simbolo': 'Note', 'tipo': 'UMLNoteView', 'forma': 'node', 'vista': 'UMLNoteView',
+                'nota': 'paleta comun: va en cualquier diagrama; nombre = su texto'},
+               {'simbolo': 'Note Link', 'tipo': 'UMLNoteLinkView', 'forma': 'line', 'vista': 'UMLNoteLinkView',
+                'conecta': ['UMLNoteView', 'View'], 'nota': 'paleta comun: de una nota a lo que comenta'}]
+    return {'tipo': t, 'alias': inv.get(t), 'simbolos': simbolos, 'comunes': comunes, 'sin_plantilla': nd}
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +496,30 @@ def _nombre_visible(doc, nuevos, p, clave, nombre, dg):
 # Diagramas y simbolos
 # ---------------------------------------------------------------------------
 
+CONTENEDORES = ('UMLModel', 'UMLPackage', 'UMLSubsystem')
+
+
+def _contenedor(doc, dentro_de, dueno=None):
+    """(elemento, aviso) donde se crea un diagrama. Si el nombre lo comparten varios elementos (un caso de uso y un
+    paquete que se llaman igual), gana el del tipo que StarUML exige para ese diagrama o, si no exige ninguno, el
+    paquete o modelo; el aviso dice cual se eligio y como pedir el otro."""
+    try:
+        return doc.find(dentro_de), None
+    except MdjError as e:
+        if 'ambiguo' not in str(e):
+            raise
+    cands = [o for o in doc.ids.values() if o and o.get('name') == dentro_de and not o['_type'].endswith('View')]
+    preferidos = [o for o in cands if dueno and dueno != 'UMLPackage' and es_subtipo(o['_type'], dueno)] or \
+        [o for o in cands if o['_type'] in CONTENEDORES]
+    if len(preferidos) != 1:
+        opts = ', '.join(f"{c['_type']}:{c['_id']}" for c in cands[:6])
+        raise MdjError(f'"{dentro_de}" es ambiguo ({opts}). Usa el id o Tipo:Nombre.')
+    elegido = preferidos[0]
+    otros = sorted({c['_type'] for c in cands if c is not elegido})
+    return elegido, (f'"{dentro_de}" lo comparten varios elementos; se uso el {elegido["_type"]}. '
+                     f'Para otro, indica Tipo:Nombre ({", ".join(t + ":" + dentro_de for t in otros)}).')
+
+
 def crear_diagrama(doc, tipo_dg, nombre, dentro_de=None, por_defecto=False):
     """Cualquier diagrama de StarUML, con lo que StarUML crea junto con el (interaccion, maquina de estados, marco...)."""
     t = tipo_diagrama(tipo_dg)
@@ -501,12 +529,14 @@ def crear_diagrama(doc, tipo_dg, nombre, dentro_de=None, por_defecto=False):
     p = plantillas().get('diagramas', {}).get(t)
     if not p:
         raise MdjError(f'No hay plantilla para crear {t}')
-    padre = doc.find(dentro_de) if dentro_de else M.modelo_raiz(doc)
     dueno = p.get('dueno')
+    padre, aviso_padre = _contenedor(doc, dentro_de, dueno) if dentro_de else (M.modelo_raiz(doc), None)
     if dueno and dueno != 'UMLPackage' and not es_subtipo(padre['_type'], dueno):
         # StarUML solo admite este diagrama dentro de un elemento de cierto tipo (bloque interno -> SysMLBlock)
         padre = crear_elemento(doc, dueno, nombre, padre['_id'])
     nuevos, avisos = instanciar(doc, p, cadena(doc, padre['_id']))
+    if aviso_padre:
+        avisos = [aviso_padre] + list(avisos)
     dg = doc.get(nuevos[p['principal']])
     dg['name'] = nombre
     # los contenedores que StarUML crea con el diagrama (interaccion, actividad, maquina de estados...) toman su nombre
@@ -1065,12 +1095,50 @@ def necesita(p):
     return bool(m & {'@cola', '@cola_m'}), bool(m & {'@cabeza', '@cabeza_m'})
 
 
+# simbolos de la paleta comun de StarUML (Annotations): se dibujan en cualquier diagrama y no tienen plantilla
+SIMBOLOS_COMUNES = {'note': 'Note', 'nota': 'Note', 'umlnote': 'Note', 'umlnoteview': 'Note',
+                    'notelink': 'Note Link', 'enlacedenota': 'Note Link', 'umlnotelink': 'Note Link',
+                    'umlnotelinkview': 'Note Link'}
+
+
+def _dibujar_comun(doc, dg, comun, texto, x, y, ancho, alto, desde, hasta, medios):
+    """Nota (con su texto) o enlace de nota (de la nota a lo que comenta) en cualquier diagrama."""
+    if comun == 'Note':
+        texto = texto or ''
+        ancho = ancho or max(120, min(320, round(M.ancho13(texto) * 11 / 13) + 30))
+        if x is None or y is None:
+            x, y = _caja_libre(dg, ancho, alto or 60)
+        v = M.nota(doc, dg, texto, x, y, ancho, alto)
+    else:
+        if desde is None or hasta is None:
+            raise MdjError('Note Link es una linea: indica desde (la nota) y hasta (lo que comenta)')
+        vc, vh = _vista(doc, dg, desde), _vista(doc, dg, hasta)
+        for k, w in (('desde', vc), ('hasta', vh)):
+            if w is None or not _es_caja(w):
+                raise MdjError(f'Note Link: "{desde if k == "desde" else hasta}" ({k}) no esta dibujado en {dg.get("name")}')
+        if 'UMLNoteView' not in (vc['_type'], vh['_type']):
+            raise MdjError('Note Link une una nota con lo que comenta: desde o hasta debe ser una nota')
+        if vh['_type'] == 'UMLNoteView' and vc['_type'] != 'UMLNoteView':
+            vc, vh = vh, vc  # la nota siempre como cola
+        v = {'_type': 'UMLNoteLinkView', '_id': doc.new_id(), '_parent': ref(dg['_id']), 'font': 'Arial;13;0',
+             'parentStyle': False, 'head': ref(vh['_id']), 'tail': ref(vc['_id']), 'lineStyle': 1,
+             'points': M.ruta(vc, vh, medios)}
+        dg.setdefault('ownedViews', []).append(v)
+    doc.reindex()
+    return {'simbolo': comun, 'vista': v['_id'], 'vista_tipo': v['_type'], 'elemento': None, 'elemento_tipo': None,
+            'avisos': []}
+
+
 def dibujar(doc, diagrama, simbolo, nombre=None, x=None, y=None, ancho=None, alto=None, desde=None, hasta=None,
             sobre=None, medios=()):
     """Dibuja un simbolo de la paleta como lo haria StarUML: crea el elemento de modelo y su vista.
     Cajas: en (x, y) o en el primer lugar libre; 'sobre' es la vista o elemento donde va (puerto sobre componente,
-    estado dentro de region, pin sobre accion, lifeline dentro del marco de tiempos...). Lineas: 'desde' y 'hasta'."""
+    estado dentro de region, pin sobre accion, lifeline dentro del marco de tiempos...). Lineas: 'desde' y 'hasta'.
+    Note (nombre = su texto) y Note Link son de la paleta comun: van en cualquier diagrama."""
     dg = doc.diagram(diagrama)
+    comun = SIMBOLOS_COMUNES.get(_clave(simbolo))
+    if comun and _clave(simbolo) not in {_clave(c.split('|')[0]) for c in plantillas()['plantillas'].get(dg['_type'], {})}:
+        return _dibujar_comun(doc, dg, comun, nombre, x, y, ancho, alto, desde, hasta, medios)
     clave, p = plantilla_simbolo(dg['_type'], simbolo)
     y_pedida = y
     marc = dict(cadena(doc, dg['_parent']['$ref']), **{'@diagrama': dg['_id']})

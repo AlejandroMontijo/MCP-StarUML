@@ -445,3 +445,28 @@ def test_staruml_dibuja_un_analisis_completo_sin_encimar_nada(vacio, tmp_path, s
     svg = ok(tool('staruml_exportar', archivo=vacio, carpeta=str(tmp_path / 'svg'), diagrama=dg))['archivos'][0]
     rev = ok(tool('svg_revisar', svg=svg, archivo=vacio, diagrama=dg))
     assert rev['n_problemas'] == 0, rev['problemas']
+
+
+def test_depende_de_usa_la_asociacion_que_ya_esta_en_el_modelo(vacio):
+    """La asociacion entre la dependiente y su padre no hay que repetirla si ya existe en el modelo: se dibuja como
+    esta, sin crear otra ni cambiarle nada."""
+    dg = _diagrama(vacio)
+    ok(tool('mdj_robustez_generar', archivo=vacio, diagrama=dg, paquete='Analisis', **_caso()))
+    doc = M.Doc(vacio)
+    par = lambda o: {doc.name_of(o['end1']['reference']['$ref']), doc.name_of(o['end2']['reference']['$ref'])}
+    antes = [o for o in doc.ids.values() if o and o.get('_type') == 'UMLAssociation' and par(o) == {'Pedido', 'LineaPedido'}]
+    assert len(antes) == 1
+    segundo = M.crear_diagrama(doc, 'clases', 'cu_1 sin repetir', dentro_de='Analisis')
+    doc.save(backup=False)
+    caso = _caso()
+    caso['asociaciones'] = [a for a in caso['asociaciones'] if 'LineaPedido' not in (a['desde'], a['hasta'])]
+    r = ok(tool('mdj_robustez_generar', archivo=vacio, diagrama=segundo['_id'], paquete='Analisis', **caso))
+    doc = M.Doc(vacio)
+    par = lambda o: {doc.name_of(o['end1']['reference']['$ref']), doc.name_of(o['end2']['reference']['$ref'])}
+    despues = [o for o in doc.ids.values() if o and o.get('_type') == 'UMLAssociation' and par(o) == {'Pedido', 'LineaPedido'}]
+    assert [o['_id'] for o in despues] == [antes[0]['_id']]  # la misma, sin duplicar
+    assert despues[0]['end1'] == antes[0]['end1'] and despues[0]['end2'] == antes[0]['end2']  # sin cambios
+    vistas = [v for v in doc.diagram(segundo['_id'])['ownedViews'] if v['_type'] == 'UMLAssociationView'
+              and v['model']['$ref'] == antes[0]['_id']]
+    assert len(vistas) == 1 and r['oose']['problemas'] == []
+    assert ids_integros(vacio)

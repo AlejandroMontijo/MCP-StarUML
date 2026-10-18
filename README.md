@@ -115,7 +115,7 @@ En la columna **Tipo**:
 | Herramienta | Tipo | Qué hace |
 |---|---|---|
 | `mdj_diagrama_crear` | cambia | Crea un diagrama vacío de cualquier tipo, como lo crea StarUML. Con `por_defecto` le quita esa marca al anterior. |
-| `mdj_dibujar` | agrega | Dibuja un símbolo de la paleta de StarUML. Solo los símbolos que en `mdj_catalogo` traen `va_sobre` (puerto, pin, invariante, auto-mensaje...) se ponen `sobre` otro. |
+| `mdj_dibujar` | agrega | Dibuja un símbolo de la paleta de StarUML. Solo los símbolos que en `mdj_catalogo` traen `va_sobre` (puerto, pin, invariante, auto-mensaje...) se ponen `sobre` otro. Note y Note Link van en cualquier diagrama. |
 | `mdj_vista_agregar` | agrega | Dibuja en un diagrama un elemento que ya existe; una relación solo entre las vistas de sus extremos. |
 | `mdj_vista_mover` | cambia | Mueve o cambia el tamaño de una vista; lo que no se indica queda igual. |
 | `mdj_linea_ruta` | cambia | Pone los puntos intermedios de una línea y calcula sus extremos igual que StarUML. |

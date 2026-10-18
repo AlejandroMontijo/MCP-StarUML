@@ -504,7 +504,8 @@ def t_diagrama_crear(a):
       'vista y llevan sobre: puerto, parte, pin, nodo de expansion, referencia a punto de conexion, auto-transicion, '
       'auto-mensaje, auto-conector, invariante de estado, restriccion de tiempo, evento de borde BPMN y, en tiempos, '
       'lifeline, estado, segmento y marca de tiempo. Los demas (carriles, estados, acciones...) van en x,y: con sobre '
-      'dan error. Las lineas llevan desde y hasta (vista o elemento ya dibujado).',
+      'dan error. Las lineas llevan desde y hasta (vista o elemento ya dibujado). Note (nombre = su texto) y Note Link '
+      '(desde la nota hasta lo que comenta) son de la paleta comun y van en cualquier diagrama.',
       obj({'archivo': ARCHIVO, 'diagrama': S(), 'simbolo': S(), 'nombre': S(), 'x': N(), 'y': N(), 'ancho': N(), 'alto': N(),
            'sobre': S(description='Vista o elemento sobre el que va el simbolo (solo los que traen va_sobre en '
                                   'mdj_catalogo)'),
@@ -593,7 +594,10 @@ def t_diagrama_generar(a):
                                                      'description': 'Lista completa: en una entidad que ya existe '
                                                                     'reemplaza sus atributos (sin la lista se quedan '
                                                                     'los que tiene)'},
-                                       'documentacion': S(), 'depende_de': S()}, ['nombre'])},
+                                       'documentacion': S(),
+                                       'depende_de': S(description='Entidad de la que depende; la asociacion entre '
+                                                                   'las dos va en asociaciones o ya existe en el '
+                                                                   'modelo')}, ['nombre'])},
            'asociaciones': {'type': 'array', 'description': 'Entre entidades. En una que ya existe solo se cambia lo '
                                                             'que se da (multiplicidad o rol no vacios, navegable)',
                             'items': obj({'desde': S(), 'hasta': S(), 'mult_desde': S(), 'mult_hacia': S(),

@@ -278,3 +278,18 @@ def test_staruml_dibuja_la_galeria(tmp_path, staruml):
     # ninguna linea termina en el aire junto a un icono (la de robustez la acomoda staruml_robustez)
     doc = M.Doc(archivo)
     assert not [x for g in G.GALERIA for x in _en_el_aire(doc, doc.diagram(g['nombre']))]
+
+
+def test_staruml_dibuja_nota_y_enlace_de_nota_fuera_de_clases(vacio, tmp_path, staruml):
+    """Note Link no sale de una plantilla dibujada por StarUML: aqui StarUML confirma que abre y dibuja la nota y su
+    enlace en un diagrama de actividades."""
+    dg = ok(tool('mdj_diagrama_crear', archivo=vacio, tipo='actividades', nombre='Con nota'))['diagrama']
+    accion = ok(tool('mdj_dibujar', archivo=vacio, diagrama=dg, simbolo='Action', nombre='Validar pedido', x=320, y=80))
+    nota = ok(tool('mdj_dibujar', archivo=vacio, diagrama=dg, simbolo='Note', nombre='Regla: total mayor a cero', x=40, y=80))
+    ok(tool('mdj_dibujar', archivo=vacio, diagrama=dg, simbolo='Note Link', desde=nota['vista'], hasta=accion['vista']))
+    svg = ok(tool('staruml_exportar', archivo=vacio, carpeta=str(tmp_path / 'svg'), diagrama=dg))['archivos'][0]
+    texto = open(svg, encoding='utf-8').read()
+    assert 'Validar pedido' in texto and 'Regla: total mayor a cero' in texto
+    destino = str(tmp_path / 'nota_en_actividades.mdj')
+    shutil.copy(vacio, destino)
+    guardar_para_revision(svg, destino)
