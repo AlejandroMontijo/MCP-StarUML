@@ -140,9 +140,8 @@ herramienta, para que quien la use obtenga el diagrama correcto a la primera:
   no toque las diagonales. Las etiquetas de los extremos en tramos verticales se separan de la linea.
 - La direccion de las asociaciones importa: un ciclo (Pedido -> Cliente con Cliente -> Solicitud -> ... -> Pedido)
   manda entidades al fondo con lineas largas; escribirlas en el sentido de la navegacion (Cliente -> Pedido).
-- Una entidad con muchas asociaciones (Producto) junta sus multiplicidades: el ruteo reparte puertos, pero las
-  etiquetas de lineas que corren juntas por el mismo canal todavia pueden tocarse (unas pocas observaciones de
-  svg_revisar; pendiente en programa.rutas).
+- Una entidad con muchas asociaciones (Producto) junta sus multiplicidades: el ruteo reparte puertos dejando el ancho
+  de sus etiquetas (robustez y, desde el 2026-10-18, tambien `programa.rutas`; ver §3e).
 - Clase asociacion en `mdj_diagrama_generar`: su caja se coloca en el primer lugar libre de cajas y lineas (tambien
   la suya) y esas relaciones se dibujan al final.
 - `mdj_validar` (metamodelo) admitia solo las vistas de la paleta del diagrama: las de la paleta comun (notas, texto,
@@ -173,7 +172,21 @@ herramienta, para que quien la use obtenga el diagrama correcto a la primera:
   `mdj_diagrama_crear` con un nombre que comparten un caso de uso y un paquete va al tipo que exige el diagrama o al
   paquete, y avisa cómo pedir el otro (`Tipo:Nombre`); `mdj_dibujar` dibuja Note y Note Link (paleta común) en cualquier
   diagrama y `mdj_catalogo` los lista en `comunes`.
-- Pendiente conocido: las líneas del modelo de dominio pueden cruzarse entre sí (no sobre cajas).
+- Resuelto el 2026-10-18, cruces y etiquetas:
+  - El orden de cada fila (`programa._acomodar_componente`, que también usa el dominio de robustez) se queda con el de
+    menos cruces de las pasadas por baricentro. Luego intercambia cajas vecinas mientras eso quite cruces.
+    - Dominio real del CU-01: de 2 cruces a 0.
+    - 200 dominios al azar: de 199 cruces a 86.
+    - Los que quedan no se quitan intercambiando dos cajas vecinas (mínimo local del acomodo por capas).
+  - Diagrama de un programa:
+    - El acomodo ya no depende de los ids, que salen del reloj: el mismo programa da el mismo dibujo.
+    - Cada línea entre el mismo par va por su lado, en paralelo.
+    - Los puertos dejan el ancho de la multiplicidad (derecha) y del rol (izquierda); la caja se ensancha hasta
+      `ANCHO_MAX` si no caben.
+    - Las líneas son ortogonales y alinean sus puertos.
+    - `etiquetas_extremos` pone cada etiqueta en el primer lugar libre junto a su caja.
+    - En la tienda de las pruebas no queda nada encimado.
+    - En 30 programas al azar de 10 a 30 clases (2270 etiquetas) quedan 79 choques de etiqueta con línea (antes 2350).
 
 ## 4. Convenciones y Reglas Inquebrantables
 

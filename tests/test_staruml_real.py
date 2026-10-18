@@ -166,7 +166,8 @@ def test_staruml_dibuja_el_diagrama_de_un_programa(tmp_path, staruml):
         R.recortar(svg, salida=png)
         archivos.append(png)
     guardar_para_revision(*archivos, informe=rev, nombre_informe='programa_svg_revisar.json')
-    assert not [p for p in rev['problemas'] if p.startswith('LINEA CRUZA CAJA')], rev['problemas']
+    # ni lineas sobre cajas ni multiplicidades o roles sobre lineas u otras etiquetas
+    assert rev['n_problemas'] == 0, rev['problemas']
 
 
 def test_staruml_abre_y_dibuja_todos_los_tipos_de_diagrama(vacio, tmp_path, staruml):

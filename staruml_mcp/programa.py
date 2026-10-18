@@ -661,6 +661,7 @@ def vista_relacion(doc, dg, rel, tail_v, head_v, medios=()):
 # ---------------------------------------------------------------------------
 
 SEP_X, SEP_X_HUECO, SEP_HUECOS, SEP_Y, MARGEN, ANCHO_BANDA, ANCHO_HUECO, MAX_POR_CAPA, CARRIL = 60, 22, 8, 120, 60, 2600, 2, 7, 9
+ANCHO_MAX = 900  # lo mas que se ensancha una caja para que quepan las etiquetas de sus lineas
 
 
 def _capas(nodos, aristas):
@@ -717,8 +718,59 @@ def _capas(nodos, aristas):
     return {n: c - base for n, c in capa.items()}
 
 
-def _acomodar_componente(comp, tam, aristas):
-    """Posiciones de una componente conexa (desde 0,0) y la geometria de sus filas, huecos y canales, para rutear."""
+def _cruces_orden(filas, arriba_de, mismas):
+    """Cruces que deja un orden de las filas: pares de lineas entre filas vecinas que se cruzan (inversiones, contadas
+    con un arbol de Fenwick) mas, por cada linea entre cajas de la misma fila, las cajas que quedan en medio."""
+    pos = {n: i for f in filas for i, n in enumerate(f)}
+    total = sum(abs(pos[a] - pos[b]) - 1 for a, b in mismas)
+    for f in filas[1:]:
+        lineas = sorted((pos[a], pos[b]) for b in f for a in arriba_de[b])
+        arbol = [0] * (len(f) + 1)
+        for k, (_, b) in enumerate(lineas):
+            i, menores = b + 1, 0  # las ya vistas con b menor o igual
+            while i:
+                menores += arbol[i]
+                i -= i & -i
+            total += k - menores
+            i = b + 1
+            while i <= len(f):
+                arbol[i] += 1
+                i += i & -i
+    return total
+
+
+def _intercambiar(filas, arriba_de, abajo_de, junto_a):
+    """Intercambia cajas vecinas de una fila mientras eso deje menos cruces con las filas de arriba y de abajo (y menos
+    cajas en medio de las lineas de la misma fila)."""
+    for _ in range(20):
+        pos = {n: i for f in filas for i, n in enumerate(f)}
+        cambio = False
+        for f in filas:
+            for j in range(len(f) - 1):
+                u, w = f[j], f[j + 1]
+                antes = despues = 0
+                for vecinos in (arriba_de, abajo_de):
+                    for a in vecinos[u]:
+                        for b in vecinos[w]:
+                            antes += pos[a] > pos[b]
+                            despues += pos[a] < pos[b]
+                for n, otro, crece in ((u, w, lambda p: p < j), (w, u, lambda p: p > j + 1)):
+                    for v in junto_a[n]:
+                        if v != otro:
+                            despues += crece(pos[v])
+                            antes += not crece(pos[v])
+                if despues < antes:
+                    f[j], f[j + 1] = w, u
+                    pos[u], pos[w] = j + 1, j
+                    cambio = True
+        if not cambio:
+            break
+
+
+def _acomodar_componente(comp, tam, aristas, copias=None):
+    """Posiciones de una componente conexa (desde 0,0) y la geometria de sus filas, huecos y canales, para rutear.
+    copias: {frozenset(par): cuantas lineas lo unen}; esas lineas pasan juntas por un hueco mas ancho."""
+    copias = copias or {}
     capa = _capas(comp, aristas)
     # una capa con demasiadas cajas se parte en varias: primero las que no conectan hacia abajo
     abajo = {a if capa[a] < capa[b] else b for a, b, _ in aristas if capa[a] != capa[b]}
@@ -749,7 +801,7 @@ def _acomodar_componente(comp, tam, aristas):
         previo, cadena = a, [a]
         for c in range(capa[a] + 1, capa[b]):
             h = ('hueco', a, b, c)
-            capa[h], ancho[h] = c, ANCHO_HUECO
+            capa[h], ancho[h] = c, ANCHO_HUECO + CARRIL * (copias.get(frozenset((a, b)), 1) - 1)
             arriba_de[h], abajo_de[h], junto_a[h] = [previo], [], []
             abajo_de[previo].append(h)
             cadena.append(h)
@@ -764,7 +816,9 @@ def _acomodar_componente(comp, tam, aristas):
     filas = [[] for _ in range(max(capa.values()) + 1)]
     for n in sorted(capa, key=lambda n: (isinstance(n, tuple), str(n))):
         filas[capa[n]].append(n)
-    # orden por baricentro (las vecinas de la misma fila tambien cuentan, para dejarlas juntas)
+    # orden por baricentro (las vecinas de la misma fila tambien cuentan, para dejarlas juntas); se queda el orden con
+    # menos cruces y luego se intercambian cajas vecinas mientras eso quite cruces
+    mejor = (_cruces_orden(filas, arriba_de, mismas), [list(f) for f in filas])
     for pasada in range(10):
         pos = {n: i for f in filas for i, n in enumerate(f)}
         bajando = pasada % 2 == 0
@@ -776,6 +830,11 @@ def _acomodar_componente(comp, tam, aristas):
             filas[i].sort(key=bari)
             for j, n in enumerate(filas[i]):
                 pos[n] = j
+        cuantos = _cruces_orden(filas, arriba_de, mismas)
+        if cuantos < mejor[0]:
+            mejor = (cuantos, [list(f) for f in filas])
+    filas = mejor[1]
+    _intercambiar(filas, arriba_de, abajo_de, junto_a)
 
     def sep(a, b):  # las lineas largas que pasan juntas van como un haz de paralelas
         huecos = isinstance(a, tuple) + isinstance(b, tuple)
@@ -805,9 +864,9 @@ def _acomodar_componente(comp, tam, aristas):
     pasan = [0] * len(filas)
     for a, b in pares:
         for c in range(capa[a], capa[b]):
-            pasan[c] += 1
-    for a, _ in mismas:
-        pasan[max(capa[a] - 1, 0)] += 1
+            pasan[c] += copias.get(frozenset((a, b)), 1)
+    for a, b in mismas:
+        pasan[max(capa[a] - 1, 0)] += copias.get(frozenset((a, b)), 1)
     canales = [max(SEP_Y, 56 + CARRIL * n) for n in pasan]
     tops, y = [], 0
     for h, g in zip(altos, canales):
@@ -837,9 +896,9 @@ def _colocar(deseo, anchos, seps):
     return [yi + o for yi, o in zip(y, desplazo)]
 
 
-def acomodar(nodos, tam, aristas):
+def acomodar(nodos, tam, aristas, copias=None):
     """Posicion (left, top) de cada caja y la geometria para rutear. Cada componente conexa por capas, una junto a
-    otra; las clases sueltas (sin relaciones) al final, en filas."""
+    otra; las clases sueltas (sin relaciones) al final, en filas. copias: {frozenset(par): cuantas lineas lo unen}."""
     vecinos = {n: set() for n in nodos}
     for a, b, _ in aristas:
         vecinos[a].add(b)
@@ -863,7 +922,7 @@ def acomodar(nodos, tam, aristas):
     x0, y0, alto_banda = MARGEN, MARGEN, 0
     for comp in componentes:
         miembros = set(comp)
-        pos, geo = _acomodar_componente(comp, tam, [(a, b, f) for a, b, f in aristas if a in miembros])
+        pos, geo = _acomodar_componente(comp, tam, [(a, b, f) for a, b, f in aristas if a in miembros], copias)
         if x0 > MARGEN and x0 + geo['ancho'] > ANCHO_BANDA:
             x0, y0, alto_banda = MARGEN, y0 + alto_banda + SEP_Y, 0
         posiciones.update({n: (x + round(x0), y + y0) for n, (x, y) in pos.items()})
@@ -929,69 +988,309 @@ def _sin_colineales(medios):
     return limpio
 
 
-def rutas(cajas, geometrias):
-    """Puntos intermedios de cada relacion, por par (arriba, abajo) o (izquierda, derecha) si estan en la misma fila.
-    Entre filas vecinas va recta si no toca otra caja; si no, sale de un puerto propio del borde, corre por su carril
-    en el canal libre entre filas, cruza las filas intermedias por su hueco reservado y entra por otro puerto propio.
-    Entre cajas de la misma fila sube al canal de arriba (en la primera fila baja al de abajo), corre y vuelve."""
-    salida = {}
+def _ancho_etiqueta(texto):
+    return M.ancho13(texto) + 2 if texto else 0
+
+
+def _sumideros(nodos, sig):
+    """Nodos de las componentes fuertemente conexas de las que no sale ninguna arista (Tarjan, sin recursion)."""
+    indice, bajo, comp, pila, en_pila = {}, {}, {}, [], set()
+
+    def entrar(v):
+        indice[v] = bajo[v] = len(indice)
+        pila.append(v)
+        en_pila.add(v)
+        return (v, iter(sig(v)))
+    for raiz in nodos:
+        if raiz in indice:
+            continue
+        trabajo = [entrar(raiz)]
+        while trabajo:
+            v, siguientes = trabajo[-1]
+            for w in siguientes:
+                if w not in indice:
+                    trabajo.append(entrar(w))
+                    break
+                if w in en_pila:
+                    bajo[v] = min(bajo[v], indice[w])
+            else:
+                trabajo.pop()
+                if trabajo:
+                    u = trabajo[-1][0]
+                    bajo[u] = min(bajo[u], bajo[v])
+                if bajo[v] == indice[v]:
+                    while True:
+                        w = pila.pop()
+                        en_pila.discard(w)
+                        comp[w] = v
+                        if w == v:
+                            break
+    sale = {comp[u] for u in nodos for w in sig(u) if comp[w] != comp[u]}
+    return [v for v in nodos if comp[v] not in sale]
+
+
+def _orden_canal(pedidos):
+    """Orden de arriba abajo de los carriles de un canal para que las lineas no se crucen cuando se puede: si un tramo
+    vertical de una linea que sube a la fila de arriba cae dentro del tramo horizontal de otra, va arriba de ella; si
+    baja a la fila de abajo, debajo. Si una linea sube y baja dentro del tramo de otra (la cruza de lado a lado) el
+    cruce no se puede evitar y no pone condicion. Si aun asi las condiciones se contradicen (un ciclo) se rompe el
+    ciclo que no espera a ninguna otra linea, por la que tiene menos pendientes; a igualdad, en el orden en que se
+    pidieron."""
+    n = len(pedidos)
+    arriba_de = {i: set() for i in range(n)}  # los que deben ir arriba de i
+    for a, pa in enumerate(pedidos):
+        xs = pa['sube_a'] + pa['baja_a']
+        lo, hi = min(xs), max(xs)
+        for b, pb in enumerate(pedidos):
+            if a == b:
+                continue
+            sube = any(lo < x < hi for x in pb['sube_a'])
+            baja = any(lo < x < hi for x in pb['baja_a'])
+            if sube and not baja:
+                arriba_de[a].add(b)
+            elif baja and not sube:
+                arriba_de[b].add(a)
+    orden, quedan = [], list(range(n))
+    while quedan:
+        resto = set(quedan)
+        libres = [i for i in quedan if not arriba_de[i] & resto]
+        if not libres:
+            # en un ciclo que no depende de otras lineas: todos sus ancestros dependen a su vez de ella
+            libres = _sumideros(quedan, lambda i: arriba_de[i] & resto)
+        j = min(libres, key=lambda i: (len(arriba_de[i] & resto), i))
+        orden.append(j)
+        quedan.remove(j)
+    return [pedidos[i] for i in orden]
+
+
+def _poner_etiqueta(v, lab, centro):
+    """StarUML pone el centro de la etiqueta en p1 + distance * (cos(t - alpha), sin(t - alpha)), con p1 el extremo de
+    la linea y t el angulo de p1 hacia el punto vecino: se calculan alpha y distance para que quede en centro."""
+    pts = _puntos(v)
+    p1, p2 = (pts[0], pts[1]) if lab.get('edgePosition') == 2 else (pts[-1], pts[-2])
+    t = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
+    a = t - math.atan2(centro[1] - p1[1], centro[0] - p1[0])
+    lab['alpha'] = math.atan2(math.sin(a), math.cos(a))
+    lab['distance'] = round(math.hypot(centro[0] - p1[0], centro[1] - p1[1]), 2)
+    lab['left'] = round(centro[0] - (lab.get('width') or 0) / 2)
+    lab['top'] = round(centro[1] - 6.5)
+
+
+def _centro_etiqueta(v, lab):
+    pts = _puntos(v)
+    p1, p2 = (pts[0], pts[1]) if lab.get('edgePosition') == 2 else (pts[-1], pts[-2])
+    t = math.atan2(p2[1] - p1[1], p2[0] - p1[0]) - (lab.get('alpha') or 0)
+    d = lab.get('distance') or 0
+    return (p1[0] + d * math.cos(t), p1[1] + d * math.sin(t))
+
+
+def _x_en(pts, y):
+    """x de la linea a la altura y, por el primer tramo que la alcanza desde el extremo pts[0]."""
+    for p, q in zip(pts, pts[1:]):
+        if min(p[1], q[1]) <= y <= max(p[1], q[1]) and p[1] != q[1]:
+            return p[0] + (q[0] - p[0]) * (y - p[1]) / (q[1] - p[1])
+    return pts[0][0]
+
+
+def _y_en(pts, x):
+    """y de la linea en x, por el primer tramo que la alcanza desde el extremo pts[0]."""
+    for p, q in zip(pts, pts[1:]):
+        if min(p[0], q[0]) <= x <= max(p[0], q[0]) and p[0] != q[0]:
+            return p[1] + (q[1] - p[1]) * (x - p[0]) / (q[0] - p[0])
+    return pts[0][1]
+
+
+def _lugares(pts, caja, ancho, lado):
+    """Centros posibles de una etiqueta de extremo, en orden de preferencia: junto a la caja, del lado pedido de la
+    linea (1: derecha o abajo, -1: izquierda o arriba), luego del otro lado, y cada vez mas lejos del borde."""
+    e = pts[0]
+    l, t, r, b = caja
+    borde = min((abs(e[1] - t), 'arriba'), (abs(e[1] - b), 'abajo'), (abs(e[0] - l), 'izq'), (abs(e[0] - r), 'der'))[1]
+    lugares = []
+    for s, k in [(s, k) for ks in ((0, 1, 2), (3, 4, 5)) for s in (lado, -lado) for k in ks]:
+        if borde in ('arriba', 'abajo'):
+            y = t - 10.5 - 15 * k if borde == 'arriba' else b + 10.5 + 15 * k
+            lugares.append((_x_en(pts, y) + s * (ancho / 2 + 5), y))
+        else:
+            x = l - 5 - ancho / 2 - 15 * k if borde == 'izq' else r + 5 + ancho / 2 + 15 * k
+            lugares.append((x, _y_en(pts, x) + s * 11))
+    return lugares
+
+
+def etiquetas_extremos(lineas, cajas):
+    """Multiplicidad (a la derecha de la linea) y rol (a la izquierda) de cada extremo de asociacion junto a su caja,
+    en el primer lugar que no toque otra etiqueta, una linea ni una caja; si no hay, en el que toque menos.
+    lineas: vistas de las relaciones; cajas: {id de la vista: (izq, arriba, der, abajo)}."""
+    toca = lambda r, s: r[0] < s[2] and s[0] < r[2] and r[1] < s[3] and s[1] < r[3]
+    # rejilla de celdas de 120 px con los tramos, las cajas y las etiquetas ya puestas que tocan cada celda
+    rejilla = {}
+
+    def celdas(r):
+        return [(i, j) for i in range(int(r[0] // 120), int(r[2] // 120) + 1)
+                for j in range(int(r[1] // 120), int(r[3] // 120) + 1)]
+
+    def poner(r, cosa):
+        for c in celdas(r):
+            rejilla.setdefault(c, []).append(cosa)
+    for v in lineas:
+        pts = _puntos(v)
+        for p, q in zip(pts, pts[1:]):
+            poner((min(p[0], q[0]), min(p[1], q[1]), max(p[0], q[0]), max(p[1], q[1])), ('linea', p, q))
+    for c in cajas.values():
+        poner(c, ('caja', c))
+    for v in lineas:
+        if v['_type'] != 'UMLAssociationView':
+            continue
+        subs = {s['_id']: s for s in v.get('subViews', [])}
+        pts = _puntos(v)
+        for extremo, camino in (('tail', pts), ('head', pts[::-1])):
+            caja = cajas.get(v[extremo]['$ref'])
+            if caja is None:
+                continue
+            for k, lado in (('MultiplicityLabel', 1), ('RoleNameLabel', -1)):
+                lab = subs.get((v.get(extremo + k) or {}).get('$ref'))
+                if not lab or lab.get('visible') is False or not lab.get('text'):
+                    continue
+                w = _ancho_etiqueta(lab['text'])
+                mejor = None
+                for i, (cx, cy) in enumerate(_lugares(camino, caja, w, lado)):
+                    rect = (cx - w / 2 - 2, cy - 8.5, cx + w / 2 + 2, cy + 8.5)
+                    costo = 0
+                    for cosa in {cosa for c in celdas(rect) for cosa in rejilla.get(c, ())}:
+                        if cosa[0] == 'linea':
+                            costo += 10 * _cruza(cosa[1], cosa[2], rect, 0)
+                        else:
+                            costo += (100 if cosa[0] == 'caja' else 10) * toca(rect, cosa[1])
+                    if mejor is None or (costo, i) < mejor[:2]:
+                        mejor = (costo, i, (cx, cy), rect)
+                    if costo == 0:
+                        break
+                _poner_etiqueta(v, lab, mejor[2])
+                poner(mejor[3], ('etiqueta', mejor[3]))
+
+
+def _seps(espacios):
+    """Separaciones minimas: borde -> primer puerto, entre puertos vecinos y ultimo puerto -> borde. espacios: (izq, der)
+    de las etiquetas de cada linea, en orden."""
+    return [10] + [max(d + i + 14, 20) for (_, d), (i, _) in zip(espacios, espacios[1:])] + [10]
+
+
+def _repartir(x0, x1, espacios):
+    """x de los puertos de un lado de la caja (x0 a x1), en orden. espacios: (izq, der) de las etiquetas de cada linea;
+    si caben, cada linea deja a sus lados el ancho de sus etiquetas y lo que sobra se reparte parejo."""
+    seps = _seps(espacios)
+    sobra = (x1 - x0) - sum(seps)
+    if sobra < 0:
+        return [x0 + (x1 - x0) * (k + 1) / (len(espacios) + 1) for k in range(len(espacios))]
+    xs, x = [], x0
+    for sp in seps[:-1]:
+        x += sp + sobra / (len(espacios) + 1)
+        xs.append(x)
+    return xs
+
+
+def rutas(cajas, geometrias, espacios=None, copias=None):
+    """Puntos intermedios de cada relacion, por (arriba, abajo, j) o (izquierda, derecha, j) si estan en la misma fila;
+    j numera las lineas que unen el mismo par (copias: {frozenset(par): cuantas}, una si no se dice).
+    Cada linea sale de un puerto propio del borde, corre por su carril en el canal libre entre filas (si sus puertos
+    quedan alineados baja recta), cruza las filas intermedias por su hueco reservado (las del mismo par, en paralelo) y
+    entra por otro puerto propio. Entre cajas de la misma fila sube al canal de arriba (en la primera
+    fila baja al de abajo), corre y vuelve. En cada canal los carriles se ordenan (_orden_canal) para que las lineas no
+    se crucen cuando se puede. espacios: {(caja, clave): (izq, der)} ancho de las etiquetas de ese extremo a cada lado
+    de la linea, que se deja libre junto a su puerto."""
+    salida, espacios, copias = {}, espacios or {}, copias or {}
+    centro_x = lambda n: (cajas[n][0] + cajas[n][2]) / 2
     for geo in geometrias:
         tops, altos, capa, canales = geo['tops'], geo['altos'], geo['capa'], geo['canales']
-        carriles, puertos, tramos = {}, {}, []
+        puertos, tramos = {}, []
 
         def puerto(n, lado, clave, hacia_x):
             puertos.setdefault((n, lado), []).append((clave, hacia_x))
         for (a, b), cadena in geo['cadenas'].items():
-            xs = [geo['huecos'][h] for h in cadena[1:-1]]
-            tramos.append(('capas', a, b, xs))
-            puerto(a, 'abajo', (a, b), xs[0] if xs else (cajas[b][0] + cajas[b][2]) / 2)
-            puerto(b, 'arriba', (a, b), xs[-1] if xs else (cajas[a][0] + cajas[a][2]) / 2)
+            n = copias.get(frozenset((a, b)), 1)
+            for j in range(n):
+                xs = [geo['huecos'][h] + (j - (n - 1) / 2) * CARRIL for h in cadena[1:-1]]
+                tramos.append(('capas', (a, b, j), xs))
+                puerto(a, 'abajo', (a, b, j), (xs[0] if xs else centro_x(b), j))
+                puerto(b, 'arriba', (a, b, j), (xs[-1] if xs else centro_x(a), j))
         for a, b in geo['mismas']:
             lado = 'arriba' if capa[a] > 0 else 'abajo'
-            tramos.append(('fila', a, b, lado))
-            puerto(a, lado, (a, b), (cajas[b][0] + cajas[b][2]) / 2)
-            puerto(b, lado, (a, b), (cajas[a][0] + cajas[a][2]) / 2)
-        px = {}
+            for j in range(copias.get(frozenset((a, b)), 1)):
+                tramos.append(('fila', (a, b, j), lado))
+                # las del mismo par van una dentro de otra: la de j mayor, mas lejos de la otra caja en las dos
+                for n, m in ((a, b), (b, a)):
+                    puerto(n, lado, (a, b, j), (centro_x(m), -j if centro_x(m) > centro_x(n) else j))
+        px, orden = {}, {}
         for (n, lado), lista in puertos.items():  # los puertos de un lado, repartidos en el orden de su destino
             x0, _, x1, _ = cajas[n]
             lista.sort(key=lambda t: t[1])
-            for i, (clave, _) in enumerate(lista):
-                px[(n, lado, clave)] = x0 + (x1 - x0) * (i + 1) / (len(lista) + 1)
+            esp = [espacios.get((n, c), (0, 0)) for c, _ in lista]
+            for (clave, _), x in zip(lista, _repartir(x0, x1, esp)):
+                px[(n, lado, clave)] = x
+            orden[(n, lado)] = ([c for c, _ in lista], _seps(esp))
 
-        def carril(c):
-            k = carriles.get(c, 0)
-            carriles[c] = k + 1
-            return tops[c] + altos[c] + 26 + (k * CARRIL) % max(CARRIL, canales[c] - 52)
-        for tipo, a, b, extra in tramos:
-            if tipo == 'fila':
-                lado = extra
-                ax, bx = px[(a, lado, (a, b))], px[(b, lado, (a, b))]
-                if lado == 'arriba':
-                    y = carril(capa[a] - 1)
-                    medios = [(ax, cajas[a][1] - 8), (ax, y), (bx, y), (bx, cajas[b][1] - 8)]
-                else:
-                    y = carril(capa[a])
-                    medios = [(ax, cajas[a][3] + 8), (ax, y), (bx, y), (bx, cajas[b][3] + 8)]
-                salida[(a, b)] = _sin_colineales(medios)
+        def cabe(n, lado, clave, x):
+            claves, seps = orden[(n, lado)]
+            i = claves.index(clave)
+            izq = px[(n, lado, claves[i - 1])] if i else cajas[n][0]
+            der = px[(n, lado, claves[i + 1])] if i + 1 < len(claves) else cajas[n][2]
+            return izq + seps[i] - 0.5 <= x <= der - seps[i + 1] + 0.5
+        # una linea entre filas vecinas baja recta si sus dos puertos se pueden alinear sin quitar lugar a las demas; una
+        # que salta filas sale y llega alineada con el hueco por el que cruza, si cabe
+        for tipo, clave, extra in tramos:
+            if tipo != 'capas':
                 continue
-            xs = extra
-            ca, cb = capa[a], capa[b]
-            if cb == ca + 1:
-                pa = ((cajas[a][0] + cajas[a][2]) / 2, (cajas[a][1] + cajas[a][3]) / 2)
-                pb = ((cajas[b][0] + cajas[b][2]) / 2, (cajas[b][1] + cajas[b][3]) / 2)
-                otras = [c for n, c in cajas.items() if n not in (a, b)]
-                if abs(pa[0] - pb[0]) < 60 and not _cruces([pa, pb], otras):
-                    salida[(a, b)] = []
-                    continue
-            ax, bx = px[(a, 'abajo', (a, b))], px[(b, 'arriba', (a, b))]
-            medios, actual = [(ax, cajas[a][3] + 8)], ax
-            for c in range(ca, cb):
-                y = carril(c)
-                siguiente = xs[c - ca] if c - ca < len(xs) else bx
-                medios += [(actual, y), (siguiente, y)]
-                actual = siguiente
+            a, b, _ = clave
+            ax, bx = px[(a, 'abajo', clave)], px[(b, 'arriba', clave)]
+            if extra:
+                if cabe(a, 'abajo', clave, extra[0]):
+                    px[(a, 'abajo', clave)] = extra[0]
+                if cabe(b, 'arriba', clave, extra[-1]):
+                    px[(b, 'arriba', clave)] = extra[-1]
+                continue
+            for obj in ((bx, ax, (ax + bx) / 2) if abs(ax - bx) >= 0.5 else ()):
+                if cabe(a, 'abajo', clave, obj) and cabe(b, 'arriba', clave, obj):
+                    px[(a, 'abajo', clave)] = px[(b, 'arriba', clave)] = obj
+                    break
+
+        # cada linea, por canal: x donde su tramo vertical sube a la fila de arriba y donde baja a la de abajo
+        pedidos, planes = {}, {}
+        for tipo, clave, extra in tramos:
+            a, b, _ = clave
+            if tipo == 'fila':
+                ax, bx = px[(a, extra, clave)], px[(b, extra, clave)]
+                c = capa[a] - 1 if extra == 'arriba' else capa[a]
+                ped = {'clave': clave, 'sube_a': [] if extra == 'arriba' else [ax, bx],
+                       'baja_a': [ax, bx] if extra == 'arriba' else []}
+                pedidos.setdefault(c, []).append(ped)
+                planes[clave] = ('fila', extra, ax, bx, c)
+                continue
+            xs, ca, cb = extra, capa[a], capa[b]
+            ax, bx = px[(a, 'abajo', clave)], px[(b, 'arriba', clave)]
+            paso = [ax] + list(xs) + [bx]  # x del tramo vertical en cada fila, de a hasta b
+            for k, c in enumerate(range(ca, cb)):
+                pedidos.setdefault(c, []).append({'clave': clave, 'sube_a': [paso[k]], 'baja_a': [paso[k + 1]]})
+            planes[clave] = ('capas', ax, bx, paso, ca, cb)
+        carril_de = {}
+        for c, lista in pedidos.items():
+            alto = max(CARRIL, canales[c] - 52)
+            for k, ped in enumerate(_orden_canal(lista)):
+                carril_de[(ped['clave'], c)] = tops[c] + altos[c] + 26 + (k * CARRIL) % alto
+        for clave, plan in planes.items():
+            a, b, _ = clave
+            if plan[0] == 'fila':
+                _, lado, ax, bx, c = plan
+                y = carril_de[(clave, c)]
+                borde = (lambda n: cajas[n][1] - 8) if lado == 'arriba' else (lambda n: cajas[n][3] + 8)
+                salida[clave] = _sin_colineales([(ax, borde(a)), (ax, y), (bx, y), (bx, borde(b))])
+                continue
+            _, ax, bx, paso, ca, cb = plan
+            medios = [(ax, cajas[a][3] + 8)]
+            for k, c in enumerate(range(ca, cb)):
+                y = carril_de[(clave, c)]
+                medios += [(paso[k], y), (paso[k + 1], y)]
             medios.append((bx, cajas[b][1] - 8))
-            salida[(a, b)] = _sin_colineales(medios)
+            salida[clave] = _sin_colineales(medios)
     return salida
 
 
@@ -1034,36 +1333,70 @@ def dibujar(doc, dg, elementos, relaciones, op, contexto=None):
         if o != d:
             # la clase base arriba de sus derivadas; la que tiene el campo arriba de la referida
             aristas.append((d, o, True) if rel['_type'] in ('UMLGeneralization', 'UMLInterfaceRealization') else (o, d, False))
-    posiciones, geometrias = acomodar(sorted(ids), tam, list(dict.fromkeys(aristas)))
+    # el acomodo se hace por el orden de los elementos (por nombre), no por sus ids, que cambian en cada corrida: asi el
+    # mismo programa da siempre el mismo diagrama
+    clave = {el['_id']: f'{i:05d}' for i, el in enumerate(elementos)}
+    # las lineas que unen el mismo par (varios campos del mismo tipo) se rutean cada una por su lado, en paralelo
+    rels.sort(key=lambda r: (r[0]['_type'] not in ('UMLGeneralization', 'UMLInterfaceRealization'), r[0]['_type']))
+    copias, numero = {}, []
+    for _, o, d in rels:
+        par = frozenset((clave[o], clave[d]))
+        numero.append(copias.get(par, 0))
+        copias[par] = numero[-1] + 1
+    aristas = list(dict.fromkeys((clave[a], clave[b], f) for a, b, f in aristas))
+    # a la derecha de una caja con una asociacion consigo misma queda lugar para el lazo y sus etiquetas
+    lazo = {}
+    for rel, o, d in rels:
+        if o == d and rel['_type'] == 'UMLAssociation':
+            textos = [('+' + e['name']) if e.get('name') else '' for e in (rel['end1'], rel['end2'])]
+            textos += [e.get('multiplicity', '') for e in (rel['end1'], rel['end2'])]
+            lazo[o] = max(lazo.get(o, 0), 40 + max(_ancho_etiqueta(t) for t in textos))
+
+    def acomodo():
+        return acomodar(sorted(clave.values()), {clave[n]: (w + lazo.get(n, 0), h) for n, (w, h) in tam.items()},
+                        aristas, copias)
+    posiciones, geometrias = acomodo()
+    sentido = {frozenset(par): par for geo in geometrias for par in list(geo['cadenas']) + geo['mismas']}
+    # cada extremo de asociacion deja junto a su puerto el ancho del rol (izquierda) y la multiplicidad (derecha)
+    espacios = {}
+    for (rel, o, d), k in zip(rels, numero):
+        par = sentido.get(frozenset((clave[o], clave[d])))
+        if rel['_type'] == 'UMLAssociation' and o != d and par is not None:
+            for n, e in ((o, rel['end1']), (d, rel['end2'])):
+                espacios[(clave[n], par + (k,))] = (_ancho_etiqueta(('+' + e['name']) if e.get('name') else ''),
+                                                    _ancho_etiqueta(e.get('multiplicity', '')))
+    # una caja con muchas lineas de un lado se ensancha (hasta ANCHO_MAX) para que quepan sus etiquetas junto a sus
+    # puertos; las filas y su orden no dependen del ancho, asi que basta acomodar otra vez
+    lados = {}
+    for geo in geometrias:
+        for a, b in list(geo['cadenas']) + geo['mismas']:
+            la, lb = ('abajo', 'arriba') if (a, b) in geo['cadenas'] else ('arriba', 'arriba') if geo['capa'][a] else ('abajo', 'abajo')
+            for k in range(copias.get(frozenset((a, b)), 1)):
+                lados.setdefault((a, la), []).append(espacios.get((a, (a, b, k)), (0, 0)))
+                lados.setdefault((b, lb), []).append(espacios.get((b, (a, b, k)), (0, 0)))
+    de_clave, ancho = {c: i for i, c in clave.items()}, {}
+    for (n, _), lista in lados.items():
+        falta = min(ANCHO_MAX, 20 + sum(i + d for i, d in lista) + 14 * (len(lista) - 1))
+        if falta > max(ancho.get(n, 0), tam[de_clave[n]][0]):
+            ancho[n] = falta
+    if ancho:
+        for n, w in ancho.items():
+            tam[de_clave[n]] = (w, tam[de_clave[n]][1])
+        posiciones, geometrias = acomodo()
     vistas = {}
     for el in elementos:
-        x, y = posiciones[el['_id']]
+        x, y = posiciones[clave[el['_id']]]
         vistas[el['_id']] = vista_clasificador(doc, dg, el, x, y, *tam[el['_id']], op, contexto.get(el['_id']),
                                                externa.get(el['_id']))
     cajas = {n: _caja(v) for n, v in vistas.items()}
-    medios_de = rutas(cajas, geometrias)
-    sentido = {frozenset(par): par for geo in geometrias for par in list(geo['cadenas']) + geo['mismas']}
-    repetidas, cruzan = {}, []
-    rels.sort(key=lambda r: (r[0]['_type'] not in ('UMLGeneralization', 'UMLInterfaceRealization'), r[0]['_type']))
-    for rel, o, d in rels:
-        par = frozenset((o, d))
-        k = repetidas.get(par, 0)
-        repetidas[par] = k + 1
-        medios = []
+    medios_de = rutas({clave[n]: c for n, c in cajas.items()}, geometrias, espacios, copias)
+    cruzan, lineas = [], []
+    for (rel, o, d), k in zip(rels, numero):
+        medios, par = [], frozenset((clave[o], clave[d]))
         if o != d and par in sentido:
-            medios = list(medios_de.get(sentido[par], []))
-            if sentido[par] != (o, d):
+            medios = list(medios_de.get(sentido[par] + (k,), []))
+            if sentido[par] != (clave[o], clave[d]):
                 medios = medios[::-1]
-            if k:  # otra linea entre las mismas dos cajas: corrida a un lado, si asi no cruza otra caja
-                otras = [c for n, c in cajas.items() if n not in (o, d)]
-                cx = (M.centro(vistas[o])[0] + M.centro(vistas[d])[0]) / 2
-                cy = (M.centro(vistas[o])[1] + M.centro(vistas[d])[1]) / 2
-                for dx in (16 * k, -16 * k):
-                    prueba = [(x + dx, y) for x, y in medios] or [(round(cx + 3 * dx), round(cy))]
-                    pts = _puntos({'points': M.ruta(vistas[o], vistas[d], prueba)})
-                    if not _cruces(pts, otras):
-                        medios = prueba
-                        break
         elif o == d and 0 < k < 4:  # otro lazo en la misma caja (Nodo izq, Nodo der): en otra esquina, sin encimarse
             l, t, w, h = (vistas[o][c] for c in ('left', 'top', 'width', 'height'))
             prueba = [[(l + w + 30, t + h * 3 / 4), (l + w + 30, t + h + 30), (l + w * 3 / 4, t + h + 30)],
@@ -1076,9 +1409,11 @@ def dibujar(doc, dg, elementos, relaciones, op, contexto=None):
             v = M.vista_asociacion(doc, dg, rel, vistas[o], vistas[d], medios)
         else:
             v = vista_relacion(doc, dg, rel, vistas[o], vistas[d], medios)
+        lineas.append(v)
         otras = [c for n, c in cajas.items() if n not in (o, d)]
         if o != d and _cruces(_puntos(v), otras):
             cruzan.append(f'{doc.name_of(o)} - {doc.name_of(d)} ({rel["_type"]})')
+    etiquetas_extremos(lineas, {vistas[n]['_id']: c for n, c in cajas.items()})
     return {'diagrama': dg.get('name'), 'id': dg['_id'], 'cajas': len(vistas), 'lineas': len(rels),
             'clases_de_otros_paquetes': sorted(doc.name_of(i) for i in contexto),
             'lineas_que_cruzan_cajas': cruzan,

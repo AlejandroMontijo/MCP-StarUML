@@ -231,6 +231,25 @@ def test_lineas_de_una_entidad_a_sus_vecinas_no_se_cruzan(vacio, orden):
     assert _cruces([pts for _, t, _, pts in _lineas(doc, doc.diagram('Analisis')) if t == 'Padre']) == 0
 
 
+def test_lineas_del_dominio_no_se_cruzan_si_el_orden_de_las_filas_lo_evita(vacio):
+    # el orden por baricentro dejaba un cruce entre Factura-Producto y Linea-Almacen; ahora se queda con el orden de
+    # menos cruces y luego intercambia cajas vecinas mientras eso quite cruces
+    asociaciones = [('Categoria', '*', 'Direccion', '*'), ('Categoria', '1..*', 'Factura', '1'),
+                    ('Categoria', '', 'Linea', '1..*'), ('Cliente', '1..*', 'Almacen', '1'),
+                    ('Direccion', '0..1', 'Cliente', ''), ('Factura', '0..1', 'Direccion', '1'),
+                    ('Factura', '0..1', 'Producto', '1'), ('Linea', '1', 'Almacen', '0..1'), ('Linea', '*', 'Factura', '*')]
+    dg = _diagrama(vacio)
+    r = ok(tool('mdj_robustez_generar', archivo=vacio, diagrama=dg, paquete='Analisis', actores=[{'nombre': 'Usuario'}],
+                pantallas=[{'nombre': 'Pantalla'}], control={'nombre': 'Control'},
+                entidades=[{'nombre': n} for n in ('Categoria', 'Factura', 'Direccion', 'Linea', 'Producto', 'Cliente',
+                                                   'Almacen')],
+                asociaciones=[{'desde': a, 'hasta': b, 'mult_desde': ma, 'mult_hacia': mb}
+                              for a, ma, b, mb in asociaciones]))
+    assert r['lineas_que_cruzan_cajas'] == [] and r['etiquetas_que_chocan'] == []
+    doc = M.Doc(vacio)
+    assert _cruces([pts for *_, pts in _lineas(doc, doc.diagram('Analisis'))]) == 0
+
+
 def test_lazo_por_abajo_conserva_su_ancho(vacio):
     # con lineas por arriba el lazo va por abajo. StarUML dibuja los lazos rectilineos, pero si el archivo dice
     # oblicuo primero los calcula asi y por abajo los angosta: las etiquetas de sus dos extremos se enciman

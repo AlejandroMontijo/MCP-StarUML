@@ -60,7 +60,8 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
   casos de uso aún no tienen paquete.
 - Disposición del diagrama de análisis (`mdj_robustez_generar` la hace sola): actor a la izquierda,
   las pantallas (boundary) en columna con su nota debajo, el control a su derecha y a la
-  derecha el modelo de dominio, por capas según la navegabilidad. Actor → pantalla y pantalla →
+  derecha el modelo de dominio, por capas según la navegabilidad y con cada fila ordenada para que
+  sus líneas se crucen lo menos posible. Actor → pantalla y pantalla →
   control son rectas con flecha; entre entidades, flecha de navegación, multiplicidad y rol en cada
   asociación. Las líneas control → entidad no se dibujan (con `lineas_control` sí).
 - La dirección de cada asociación decide quién va arriba: escribirla en el sentido de la navegación
@@ -227,9 +228,16 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
     ambos sentidos. Las constantes `static` quedan como atributos. Con `dependencias`, los
     tipos de parámetros y retornos que no estén ya relacionados dan dependencias.
   - Acomodo: la clase base arriba de sus derivadas y el dueño del campo arriba de la clase
-    referida (mientras no alargue el diagrama de más); filas de hasta 7 cajas; cada línea
-    que salta filas pasa por un hueco reservado y corre por el canal libre entre filas, así
-    que ninguna cruza una caja. El resultado reporta `lineas_que_cruzan_cajas` (vacío).
+    referida (mientras no alargue el diagrama de más); filas de hasta 7 cajas, ordenadas para
+    que las líneas se crucen lo menos posible; cada línea que salta filas pasa por un hueco
+    reservado y corre por el canal libre entre filas, así que ninguna cruza una caja. El
+    resultado reporta `lineas_que_cruzan_cajas` (vacío). El mismo programa da siempre el mismo
+    diagrama.
+  - Líneas y etiquetas: varias asociaciones entre las mismas dos clases (campos del mismo tipo)
+    van en paralelo, cada una con su puerto y su carril. La multiplicidad va a la derecha de la
+    línea y el rol a la izquierda, junto a la caja, en el primer lugar que no toque otra
+    etiqueta, una línea ni una caja; cada puerto deja el ancho de sus etiquetas y una caja con
+    muchas líneas de un lado se ensancha (hasta 900 px) para que quepan.
   - Un diagrama para todo el programa o uno por paquete; sin indicarlo, por paquete cuando hay más de
     60 clases en varios paquetes. En cada diagrama por paquete, las clases de otros paquetes que se
     relacionan con las suyas aparecen compactas (solo nombre y "(from paquete)") con esas relaciones.
