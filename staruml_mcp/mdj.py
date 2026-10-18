@@ -1204,7 +1204,8 @@ def mover_vista(v, left=None, top=None, width=None, height=None):
     if width is not None:
         v['width'] = width
         for s in v.get('subViews', []):
-            if s['_type'] in ('UMLNameCompartmentView', 'UMLAttributeCompartmentView') and s.get('visible') is not False:
+            if s['_type'] in ('UMLNameCompartmentView', 'UMLAttributeCompartmentView', 'UMLOperationCompartmentView') \
+                    and s.get('visible') is not False:
                 s['width'] = width + 1
                 for l in s.get('subViews', []):
                     if l.get('visible') is not False and 'text' in l:
@@ -1213,9 +1214,43 @@ def mover_vista(v, left=None, top=None, width=None, height=None):
         v['height'] = height
 
 
+ICONO, NOMBRE_ICONO = 40, 25  # notacion de iconos: alto del icono (boundary, control, entity) y del nombre debajo
+
+
+def alto_compartimento(n):
+    """Alto con que StarUML dibuja un compartimento de atributos u operaciones con n renglones: 5 arriba, 13 por
+    renglon con 2 entre uno y otro, y 5 abajo. Vacio mide 10."""
+    return 15 * n + 8 if n else 10
+
+
 def alto_minimo_atributos(n):
-    """Alto que necesita la vista de una clase para mostrar n atributos."""
-    return 73 + 15 * n
+    """Alto que necesita la vista de una clase para mostrar n atributos (sin operaciones)."""
+    return ICONO + NOMBRE_ICONO + alto_compartimento(n)
+
+
+def muestra_compartimentos(v):
+    """(atributos, operaciones): si StarUML dibuja esos compartimentos en la vista de una clase. Lo decide con
+    suppressAttributes y suppressOperations (sin la clave los muestra, salvo en interfaces y actores); el visible
+    guardado en cada compartimento lo pone a partir de esos."""
+    oculta = v.get('_type') in ('UMLInterfaceView', 'UMLActorView')
+    return not v.get('suppressAttributes', oculta), not v.get('suppressOperations', oculta)
+
+
+def alto_minimo_vista(v, cls):
+    """Alto con que StarUML dibuja la vista de una clase en notacion de iconos: el icono, el nombre y los
+    compartimentos de atributos y de operaciones que muestra (en la notacion de etiqueta, sin icono, sobra). Con
+    menos, StarUML agranda la caja y las lineas y etiquetas que se calcularon con ella quedan en otro lugar."""
+    atributos, operaciones = muestra_compartimentos(v)
+    return ICONO + NOMBRE_ICONO + (alto_compartimento(len(cls.get('attributes', []))) if atributos else 0) + \
+        (alto_compartimento(len(cls.get('operations', []))) if operaciones else 0)
+
+
+def renglones_vista(doc, v, cls):
+    """Textos de los atributos y las operaciones que muestra la vista de una clase (para medir su ancho)."""
+    atributos, operaciones = muestra_compartimentos(v)
+    firma = v.get('showOperationSignature', True)
+    return ([_texto_atributo(doc, a) for a in cls.get('attributes', [])] if atributos else []) + \
+        ([_texto_operacion(doc, o, firma) for o in cls.get('operations', [])] if operaciones else [])
 
 
 def rehacer_atributos_vista(doc, v, cls, conservar_alto=False):
@@ -1238,14 +1273,60 @@ def rehacer_atributos_vista(doc, v, cls, conservar_alto=False):
                   'text': _texto_atributo(doc, a), 'horizontalAlignment': 0})
         subs.append(s)
     acv['subViews'] = subs
-    minimo = alto_minimo_atributos(n)
+    minimo = alto_minimo_vista(v, cls)
     v['height'] = max(v['height'], minimo) if (conservar_alto or n == 0) else minimo
+
+
+def rehacer_operaciones_vista(doc, v, cls):
+    """Rehace el compartimento de operaciones de la vista con las operaciones de la clase: un renglon por operacion
+    (con su firma si la vista la muestra) si se ve, o ninguno si no, como lo guarda StarUML. Las vistas de las
+    operaciones que ya tenia se conservan y las de otras clases (las de una vista copiada) se quitan."""
+    opc = next((s for s in v.get('subViews', []) if s['_type'] == 'UMLOperationCompartmentView'), None)
+    if opc is None:
+        return
+    atributos, operaciones = muestra_compartimentos(v)
+    if not operaciones:
+        opc['visible'] = False
+        opc.pop('subViews', None)
+        return
+    opc.pop('visible', None)
+    ops = cls.get('operations', [])
+    top = v['top'] + ICONO + NOMBRE_ICONO + (alto_compartimento(len(cls.get('attributes', []))) if atributos else 0)
+    opc.update({'left': v['left'], 'top': top, 'width': v['width'] + 1, 'height': alto_compartimento(len(ops))})
+    viejos = {s['model']['$ref']: s for s in opc.get('subViews', []) if isinstance(s.get('model'), dict)}
+    firma = v.get('showOperationSignature', True)
+    subs = []
+    for i, o in enumerate(ops):
+        s = viejos.get(o['_id']) or {'_type': 'UMLOperationView', '_id': doc.new_id(), '_parent': ref(opc['_id']),
+                                     'model': ref(o['_id']), 'font': 'Arial;13;0', 'parentStyle': True}
+        s.update({'left': v['left'] + 5, 'top': top + 5 + 15 * i, 'width': v['width'] - 9, 'height': 13,
+                  'text': _texto_operacion(doc, o, firma), 'horizontalAlignment': 0})
+        subs.append(s)
+    opc['subViews'] = subs
 
 
 def _texto_atributo(doc, a):
     t = a.get('type')
     t = doc.name_of(t['$ref']) if isinstance(t, dict) and t.get('$ref') else (t if isinstance(t, str) else '')
     return '+' + (a.get('name') or '') + (f': {t}' if t else '')
+
+
+VISIBILIDAD = {'public': '+', 'private': '-', 'protected': '#', 'package': '~'}
+
+
+def _texto_operacion(doc, o, firma=True):
+    """Renglon de una operacion como lo escribe StarUML: visibilidad y nombre y, con firma, sus parametros y lo que
+    regresa; sin firma, solo '()'."""
+    def tipo(t):
+        return doc.name_of(t['$ref']) if isinstance(t, dict) and t.get('$ref') else (t if isinstance(t, str) else '')
+    texto = VISIBILIDAD.get(o.get('visibility', 'public'), '+') + (o.get('name') or '')
+    if not firma:
+        return texto + '()'
+    ps = o.get('parameters', [])
+    args = ', '.join((p.get('name') or '') + (f': {tipo(p.get("type"))}' if tipo(p.get('type')) else '')
+                     for p in ps if p.get('direction') != 'return')
+    ret = next((tipo(p.get('type')) for p in ps if p.get('direction') == 'return'), '')
+    return f'{texto}({args})' + (f': {ret}' if ret else '')
 
 
 def set_atributos(doc, cls, nombres):
@@ -1419,33 +1500,41 @@ def _compartment(doc, tipo, parent, model, visible=False, x=0, y=0):
     return c
 
 
-def vista_nueva(doc, dg, el, x, y, ancho=None, alto=None):
-    """Agrega la vista de una clase o actor a un diagrama de clases, en notacion de iconos."""
-    if dg['_type'] not in ('UMLClassDiagram', 'UMLUseCaseDiagram'):
-        raise MdjError(f'{dg.get("name")} es {dg["_type"]}: aqui solo se agregan vistas a diagramas de clases o de casos de uso')
-    if el['_type'] not in ('UMLClass', 'UMLActor', 'UMLInterface'):
-        raise MdjError(f'{el.get("name")} es {el["_type"]}: solo se dibujan clases, interfaces o actores')
+def plantilla_vista(doc, el):
+    """(vista, elemento) que copia vista_nueva para dibujar el: la primera vista de otro elemento del mismo
+    estereotipo y tipo, o None."""
     k = doc.kind(el)
-    # si ya hay una vista de otra clase del mismo estereotipo, se clona para copiar su estilo exacto
-    plantilla = None
     for d2 in doc.diagrams():
         for v in d2.get('ownedViews', []):
             m = v.get('model')
             if v['_type'] in ('UMLClassView', 'UMLActorView', 'UMLInterfaceView') and isinstance(m, dict):
                 o = doc.ids.get(m['$ref'])
                 if o and o['_id'] != el['_id'] and doc.kind(o) == k and o['_type'] == el['_type']:
-                    plantilla = (v, o); break
-        if plantilla:
-            break
+                    return v, o
+    return None
+
+
+def vista_nueva(doc, dg, el, x, y, ancho=None, alto=None):
+    """Agrega la vista de una clase o actor a un diagrama de clases, en notacion de iconos. Si ya hay una vista de otro
+    elemento del mismo estereotipo (plantilla_vista), copia su estilo, tambien si muestra las operaciones, con los
+    atributos y las operaciones de el."""
+    if dg['_type'] not in ('UMLClassDiagram', 'UMLUseCaseDiagram'):
+        raise MdjError(f'{dg.get("name")} es {dg["_type"]}: aqui solo se agregan vistas a diagramas de clases o de casos de uso')
+    if el['_type'] not in ('UMLClass', 'UMLActor', 'UMLInterface'):
+        raise MdjError(f'{el.get("name")} es {el["_type"]}: solo se dibujan clases, interfaces o actores')
+    k = doc.kind(el)
+    # si ya hay una vista de otra clase del mismo estereotipo, se clona para copiar su estilo exacto
+    plantilla = plantilla_vista(doc, el)
     nombre = el.get('name', '')
     if ancho is None:
         ancho = max(100, round(7.6 * len(nombre) + 12))
     if plantilla:
         v, o = plantilla
         nv = _clonar(doc, v, {o['_id']: el['_id']})
-        acv = [s for s in nv.get('subViews', []) if s['_type'] == 'UMLAttributeCompartmentView']
-        if acv:
-            acv[0]['subViews'] = []
+        # los renglones de atributos y operaciones son de la otra clase: se rehacen con los de el
+        for s in nv.get('subViews', []):
+            if s['_type'] in ('UMLAttributeCompartmentView', 'UMLOperationCompartmentView') and 'subViews' in s:
+                s['subViews'] = []
         nv['_parent'] = ref(dg['_id'])
         mover_vista(nv, x, y, ancho)
     else:
@@ -1489,10 +1578,14 @@ def vista_nueva(doc, dg, el, x, y, ancho=None, alto=None):
             if s['_type'] == 'UMLAttributeCompartmentView':
                 s.pop('visible', None)
     dg.setdefault('ownedViews', []).append(nv)
+    rehacer_operaciones_vista(doc, nv, el)
     if muestra_attrs:
         rehacer_atributos_vista(doc, nv, el)
     if alto:
         nv['height'] = alto
+    elif nv['_type'] != 'UMLActorView':
+        # el de la plantilla es el de otra clase, con mas o menos renglones
+        nv['height'] = alto_minimo_vista(nv, el)
     return nv
 
 

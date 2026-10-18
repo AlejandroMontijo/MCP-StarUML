@@ -384,3 +384,95 @@ def test_modelo_real_regenerado_con_lo_que_tiene_el_modelo_se_ve_limpio_en_staru
                   diagrama=nuevo['_id']))['archivos'][0]
     rev = ok(tool('svg_revisar', svg=svg, archivo=real, diagrama=nuevo['_id']))
     assert rev['n_problemas'] == 0, rev['problemas']
+
+
+# ---------------------------------------------------------------------------
+# Entidades que muestran sus operaciones y una con cinco lineas por el mismo lado
+# ---------------------------------------------------------------------------
+
+HIJAS = ['LineaPedido', 'Pago', 'Envio', 'Factura', 'Devolucion']
+
+
+def _alto_staruml(el, operaciones):
+    """Alto con que StarUML dibuja una entidad en notacion de iconos: icono 40, nombre 25 y cada compartimento que
+    muestra con 5 arriba, 13 por renglon y 2 entre renglones, y 5 abajo (vacio mide 10)."""
+    comp = lambda n: 15 * n + 8 if n else 10
+    return 40 + 25 + comp(len(el.get('attributes', []))) + (comp(len(el.get('operations', []))) if operaciones else 0)
+
+
+def _pedido_con_cinco(vacio):
+    """Pedido con cinco asociaciones hacia abajo (todas con '1' de su lado) y Cliente arriba, cada entidad con sus
+    operaciones. En 'Analisis' sus vistas las muestran, como queda un diagrama al que se le activaron en StarUML.
+    Devuelve el caso sin valores, para regenerarlo con lo que tiene el modelo."""
+    entidades = [{'nombre': 'Cliente', 'atributos': ['nombre', 'telefono', 'correo']},
+                 {'nombre': 'Pedido', 'atributos': ['folio', 'fecha', 'estado', 'direccionEnvio', 'observaciones',
+                                                     'total', 'motivoCancelacion']}] + \
+        [{'nombre': n, 'atributos': [f'{n[0].lower()}{n[1:]}{i}' for i in range(2 + k % 3)]}
+         for k, n in enumerate(HIJAS)]
+    asociaciones = [{'desde': 'Cliente', 'hasta': 'Pedido', 'mult_desde': '1', 'mult_hacia': '0..*'}] + \
+        [{'desde': 'Pedido', 'hasta': n, 'mult_desde': '1', 'mult_hacia': m}
+         for n, m in zip(HIJAS, ('1..*', '0..*', '0..1', '1', '0..*'))]
+    caso = dict(actores=[{'nombre': 'Vendedor'}], pantallas=[{'nombre': 'PantallaPedido'}, {'nombre': 'PantallaEnvio'}],
+                control={'nombre': 'ControlPedido'}, entidades=entidades, asociaciones=asociaciones)
+    ok(tool('mdj_robustez_generar', archivo=vacio, diagrama=_diagrama(vacio, 'Analisis'), paquete='Analisis', **caso))
+    doc = M.Doc(vacio)
+    for e in entidades:
+        el = doc.find(e['nombre'], types=('UMLClass',))
+        ops = ('guardar', 'consultar', 'actualizar', 'cancelar') if e['nombre'] == 'Pedido' else ('guardar',)
+        el['operations'] = [{'_type': 'UMLOperation', '_id': doc.new_id(), '_parent': M.ref(el['_id']),
+                             'name': op + e['nombre']} for op in ops]
+    for v in doc.diagram('Analisis')['ownedViews']:
+        el = doc.ids.get((v.get('model') or {}).get('$ref'))
+        if v['_type'] != 'UMLClassView' or doc.kind(el) != 'entity':
+            continue
+        v['suppressOperations'] = False
+        opc = next(s for s in v['subViews'] if s['_type'] == 'UMLOperationCompartmentView')
+        opc.pop('visible', None)
+        opc['subViews'] = [{'_type': 'UMLOperationView', '_id': doc.new_id(), '_parent': M.ref(opc['_id']),
+                            'model': M.ref(o['_id']), 'font': 'Arial;13;0', 'parentStyle': True,
+                            'left': v['left'] + 5, 'top': v['top'] + v['height'] + 5 + 15 * i,
+                            'width': v['width'] - 9, 'height': 13, 'text': f'+{o["name"]}()',
+                            'horizontalAlignment': 0} for i, o in enumerate(el['operations'])]
+        v['height'] = _alto_staruml(el, True)
+    doc.reindex()
+    doc.save(backup=False)
+    return _minimo(caso)
+
+
+def test_entidades_que_muestran_operaciones_se_miden_con_ellas(vacio):
+    # las vistas nuevas copian el estilo de las de 'Analisis' y muestran sus propias operaciones: la caja mide lo que
+    # StarUML dibuja. Antes se media solo con los atributos, StarUML la agrandaba y las cinco lineas que salen por
+    # abajo de Pedido (y sus '1') quedaban en otro lugar del calculado; ademas los renglones eran los de la plantilla
+    caso = _pedido_con_cinco(vacio)
+    r = ok(tool('mdj_robustez_generar', archivo=vacio, diagrama=_diagrama(vacio, 'Analisis 2'), paquete='Analisis',
+                **caso))
+    assert r['etiquetas_que_chocan'] == [] and r['lineas_que_cruzan_cajas'] == []
+    doc = M.Doc(vacio)
+    dg = doc.diagram('Analisis 2')
+    cajas = {doc.name_of(v['model']['$ref']): v for v in dg['ownedViews'] if v['_type'] == 'UMLClassView'}
+    for n in ['Cliente', 'Pedido'] + HIJAS:
+        el, v = doc.find(n, types=('UMLClass',)), cajas[n]
+        assert v['height'] == _alto_staruml(el, True), n
+        opc = next(s for s in v['subViews'] if s['_type'] == 'UMLOperationCompartmentView')
+        assert [s['model']['$ref'] for s in opc['subViews']] == [o['_id'] for o in el['operations']], n
+    # las cinco salen del borde de abajo de Pedido y su '1' queda entre la caja y el tramo que dobla
+    pedido = cajas['Pedido']
+    abajo = pedido['top'] + pedido['height']
+    salen = [v for v in dg['ownedViews'] if v['_type'] == 'UMLAssociationView' and v['tail']['$ref'] == pedido['_id']]
+    assert len(salen) == 5
+    for v in salen:
+        pts = RB._puntos(v)
+        lab = next(s for s in v['subViews'] if s['_id'] == v['tailMultiplicityLabel']['$ref'])
+        assert lab['text'] == '1' and pts[0][1] == abajo
+        assert abajo < RB._centro_etiqueta(v, lab)[1] < min(y for _, y in pts[1:]) - 5.5
+    assert ids_integros(vacio)
+
+
+def test_staruml_dibuja_limpia_una_entidad_con_cinco_lineas_por_abajo_que_muestra_operaciones(vacio, tmp_path,
+                                                                                               staruml):
+    caso = _pedido_con_cinco(vacio)
+    dg = _diagrama(vacio, 'Analisis 2')
+    ok(tool('mdj_robustez_generar', archivo=vacio, diagrama=dg, paquete='Analisis', **caso))
+    svg = ok(tool('staruml_exportar', archivo=vacio, carpeta=str(tmp_path / 'svg'), diagrama=dg))['archivos'][0]
+    rev = ok(tool('svg_revisar', svg=svg, archivo=vacio, diagrama=dg))
+    assert rev['n_problemas'] == 0, rev['problemas']

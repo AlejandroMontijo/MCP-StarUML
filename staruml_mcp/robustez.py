@@ -819,12 +819,16 @@ def generar_robustez(doc, diagrama, paquete, actores, pantallas, control, entida
                                    pedidos[i])
     queda = {i: _como_queda(asoc, inv) for i, (asoc, inv, _) in resueltas.items()}
 
-    # tamanos: las entidades con los atributos que de verdad tienen (tambien los que ya tenian si no se dan)
+    # tamanos: las entidades con lo que de verdad muestran sus vistas. Se dibujan primero (y despues del acomodo se
+    # mueven a su lugar) porque vista_nueva copia el estilo de otra vista: si esa muestra las operaciones, la entidad
+    # tambien, y StarUML agrandaria la caja que solo se midiera con los atributos (las lineas y sus etiquetas
+    # quedarian donde no se calcularon)
     tam = {a['nombre']: (_ancho(a['nombre']), ALTO_ACTOR) for a in actores}
     tam.update({n: (_ancho(n), ALTO_PANTALLA) for n in pant_nombres + [ctrl]})
+    vistas = {}
     for n in ent_nombres:
-        attrs = els[n].get('attributes') or []
-        tam[n] = (_ancho(n, [M._texto_atributo(doc, x) for x in attrs]), M.alto_minimo_atributos(len(attrs)))
+        vistas[n] = M.vista_nueva(doc, dg, els[n], 0, 0)
+        tam[n] = (_ancho(n, M.renglones_vista(doc, vistas[n], els[n])), M.alto_minimo_vista(vistas[n], els[n]))
 
     # modelo de dominio: arriba queda el extremo que navega (hasta si navegable es 'desde') y, entre una entidad y la
     # que depende de ella, la de la que depende
@@ -891,9 +895,11 @@ def generar_robustez(doc, diagrama, paquete, actores, pantallas, control, entida
     pos.update({n: (x + dx, y_ + dy) for n, (x, y_) in pos_e.items()})
     cy = {n: pos[n][1] + ALTO_PANTALLA / 2 for n in pant_nombres}
 
-    vistas = {}
     for n, (x, y_) in pos.items():
-        vistas[n] = M.vista_nueva(doc, dg, els[n], x, y_, tam[n][0], tam[n][1])
+        if n in vistas:
+            M.mover_vista(vistas[n], x, y_, tam[n][0], tam[n][1])
+        else:
+            vistas[n] = M.vista_nueva(doc, dg, els[n], x, y_, tam[n][0], tam[n][1])
     cajas_nota = []
     for n in pant_nombres:
         if n in notas:

@@ -116,14 +116,14 @@ En la columna **Tipo**:
 |---|---|---|
 | `mdj_diagrama_crear` | cambia | Crea un diagrama vacío de cualquier tipo, como lo crea StarUML. Con `por_defecto` le quita esa marca al anterior. |
 | `mdj_dibujar` | agrega | Dibuja un símbolo de la paleta de StarUML. Solo los símbolos que en `mdj_catalogo` traen `va_sobre` (puerto, pin, invariante, auto-mensaje...) se ponen `sobre` otro. |
-| `mdj_vista_agregar` | agrega | Dibuja en un diagrama un elemento que ya existe; una relación solo entre las vistas de sus extremos. |
+| `mdj_vista_agregar` | agrega | Dibuja en un diagrama un elemento que ya existe; una relación solo entre las vistas de sus extremos. Una clase copia el estilo de otra vista del mismo estereotipo (también si muestra las operaciones) con sus propios atributos y operaciones, y queda del alto con que StarUML la dibuja. |
 | `mdj_vista_mover` | cambia | Mueve o cambia el tamaño de una vista; lo que no se indica queda igual. |
 | `mdj_linea_ruta` | cambia | Pone los puntos intermedios de una línea y calcula sus extremos igual que StarUML. |
 | `mdj_linea_etiqueta` | cambia | Mueve una etiqueta de una línea (multiplicidad, rol o nombre) sin tocar la línea. |
 | `mdj_nota` | cambia | Crea una nota o edita una existente; el alto se calcula según el texto. |
 | `mdj_diagrama_generar` | agrega | Dibuja un diagrama completo de cualquier tipo a partir de listas de elementos y relaciones, con acomodo por capas o de secuencia. Las líneas se rutean para no cruzar cajas; las que no lo logran se listan en `lineas_que_cruzan_cajas`. |
 | `mdj_secuencia_generar` | cambia | Rehace un diagrama de secuencia desde la lista de lifelines y mensajes: activaciones, espaciado y separación según el texto de los mensajes. Cada clave tiene su propia lifeline aunque se repita el tipo. Con `metodos` la revisión OOSE de la respuesta usa el mismo criterio que `mdj_validar`. |
-| `mdj_robustez_generar` | cambia | Dibuja el diagrama de análisis (robustez) de un caso de uso: actores a la izquierda (uno `secundario`, como un servicio de correo, recibe la flecha), pantallas en columna con su nota debajo, un control y el modelo de dominio por capas con su herencia. Reusa los elementos y asociaciones que ya existen; en una asociación reusada solo cambia lo que se pide. Si se le pasan atributos de una entidad que ya existe, la deja con esos. Acepta `metodos` como `mdj_validar`. |
+| `mdj_robustez_generar` | cambia | Dibuja el diagrama de análisis (robustez) de un caso de uso: actores a la izquierda (uno `secundario`, como un servicio de correo, recibe la flecha), pantallas en columna con su nota debajo, un control y el modelo de dominio por capas con su herencia. Reusa los elementos y asociaciones que ya existen; en una asociación reusada solo cambia lo que se pide. Si se le pasan atributos de una entidad que ya existe, la deja con esos. Cada entidad se mide con lo que muestra su vista: si copia el estilo de una que muestra las operaciones, también con las suyas. Acepta `metodos` como `mdj_validar`. |
 
 ## Seguridad al escribir
 
