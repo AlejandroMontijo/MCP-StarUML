@@ -208,6 +208,7 @@ docs/
   catalogo.md          Cada tipo de diagrama con su notación y sus símbolos
 herramientas/          Scripts para regenerar las tablas de datos/ desde un StarUML instalado
 tests/                 Pruebas (pytest): python3 -m pytest tests
+.github/workflows/     CI: ruff y pytest en macOS, Linux y Windows (Python 3.9 y 3.12)
 ```
 
 ## Regenerar las tablas desde StarUML

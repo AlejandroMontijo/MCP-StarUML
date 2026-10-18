@@ -36,6 +36,7 @@ MCP StarUML/
 │   └── catalogo.md        # Catálogo de diagramas y símbolos con secciones de UML 2.5.1 (generado)
 ├── herramientas/          # Scripts que regeneran datos/ y docs/catalogo.md, y la extensión de StarUML que dibuja la referencia
 ├── tests/                 # Pruebas pytest con modelos .mdj sintéticos (apoyo.py arma los modelos; conftest.py los aísla)
+├── .github/workflows/     # CI: ruff y pytest en macOS, Linux y Windows con Python 3.9 y 3.12 en cada push y PR
 ├── README.md              # Uso: instalación, herramientas, seguridad, variables de entorno
 ├── CLAUDE.md              # Este archivo
 └── .gitignore             # Ignora scratch/, pruebas/, respaldos/, salidas/, referencias/ y .pytest_cache/
@@ -44,9 +45,10 @@ MCP StarUML/
 Imports entre módulos: relativos dentro del paquete (`from . import mdj as M`); desde fuera,
 `from staruml_mcp import mdj as M`. Los respaldos van a `respaldos/` en la raíz (o `STARUML_MCP_BACKUP_DIR`).
 
-> **Pruebas sí, CI no:** `tests/` se versiona (se quitó y se restauró el 2026-10-11); no hay integración continua en
-> GitHub, así que las pruebas se corren en local antes de cada PR. `pruebas/`, `respaldos/` y `salidas/` son carpetas
-> locales e ignoradas. Las pruebas que usan un modelo real se omiten si no hay `pruebas/*.mdj` ni `STARUML_MCP_MODELO_REAL`.
+> **Pruebas y CI:** `tests/` se versiona (se quitó y se restauró el 2026-10-11). La integración continua
+> (`.github/workflows/pruebas.yml`, restaurada el 2026-10-18) corre `ruff check --select F,E9 .` y la suite en macOS,
+> Linux y Windows con Python 3.9 y 3.12 en cada push y PR; igual conviene correr las pruebas en local antes de cada PR.
+> Las que necesitan StarUML se omiten en el CI. `pruebas/`, `respaldos/` y `salidas/` son carpetas locales e ignoradas. Las pruebas que usan un modelo real se omiten si no hay `pruebas/*.mdj` ni `STARUML_MCP_MODELO_REAL`.
 
 ---
 
@@ -88,8 +90,8 @@ Imports entre módulos: relativos dentro del paquete (`from . import mdj as M`);
 - La detección de "StarUML abierto" cubre macOS, Linux y Windows y bloquea si no puede verificar (`forzar: true` para omitirla).
 - Render portable: StarUML y Chrome se buscan en rutas típicas, `PATH` y `STARUML_MCP_STARUML_BIN` / `STARUML_MCP_CHROME_BIN`; sin `sips` ni `perl`.
 - Fase 3 completa: bitácora por `stderr` (`STARUML_MCP_LOG_LEVEL`), coherencia caso de uso ↔ paquete de robustez, generador C#, parsers de Kotlin y Go, auto-mensajes en `mdj_secuencia_generar`, y lectura (`mdj_comportamiento`) y validación de diagramas de estados y de actividades.
-- La geometría de los auto-mensajes sigue la forma estándar de UML; falta confirmarla abriendo el archivo en StarUML.
-- `staruml_programa_a_diagrama` (v2.1.0) dibuja el diagrama de clases de un programa Java completo. Las vistas de enumeración y de realización de interfaz siguen el metamodelo de StarUML pero solo se confirman con `tests/test_staruml_real.py` en una máquina con StarUML. La regla "en análisis no se ponen métodos" de `reglas_oose` aplica solo a boundary, control, entity y actores, así que esas clases de diseño no se marcan.
+- Auto-mensajes en secuencias: confirmados en StarUML real; el texto se coloca con alpha/distance desde el tramo vertical del lazo (ver §3c).
+- `staruml_programa_a_diagrama` (v2.1.0) dibuja el diagrama de clases de un programa Java completo. Las vistas de enumeración y de realización de interfaz se confirmaron en StarUML real (`test_staruml_dibuja_el_diagrama_de_un_programa` pasó en macOS). La regla "en análisis no se ponen métodos" de `reglas_oose` aplica solo a boundary, control, entity y actores, así que esas clases de diseño no se marcan.
 
 ## 3c. Todos los diagramas y simbolos de StarUML (2026-10-01, v2.2.0)
 
