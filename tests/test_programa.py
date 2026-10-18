@@ -40,6 +40,41 @@ def geometria_limpia(doc, dg):
         assert P._cruces(pts, otras) == 0, ('linea que cruza una caja', doc.name_of(v['model']['$ref']), v['points'])
 
 
+def choques_de_etiquetas(dg):
+    """Multiplicidades y roles (donde los pone StarUML: alpha y distance desde el extremo) que tocan una linea, una caja
+    u otra etiqueta."""
+    cajas = [P._caja(v) for v in vistas_de_cajas(dg)]
+    lineas = [P._puntos(v) for v in dg['ownedViews'] if 'points' in v]
+    textos = []
+    for v in dg['ownedViews']:
+        if v['_type'] != 'UMLAssociationView':
+            continue
+        subs = {s['_id']: s for s in v.get('subViews', [])}
+        for k in ('tailMultiplicityLabel', 'tailRoleNameLabel', 'headMultiplicityLabel', 'headRoleNameLabel'):
+            lab = subs.get((v.get(k) or {}).get('$ref'))
+            if lab and lab.get('visible') is not False and lab.get('text'):
+                c, w = P._centro_etiqueta(v, lab), P._ancho_etiqueta(lab['text'])
+                textos.append((lab['text'], (c[0] - w / 2, c[1] - 5.5, c[0] + w / 2, c[1] + 5.5)))
+    toca = lambda r, s: r[0] < s[2] and s[0] < r[2] and r[1] < s[3] and s[1] < r[3]
+    problemas = []
+    for i, (t, r) in enumerate(textos):
+        problemas += [f'"{t}" sobre una linea' for pts in lineas for p, q in zip(pts, pts[1:]) if P._cruza(p, q, r, -1)]
+        problemas += [f'"{t}" sobre una caja' for c in cajas if toca(r, c)]
+        problemas += [f'"{t}" encimada con "{t2}"' for t2, r2 in textos[i + 1:] if toca(r, r2)]
+    return problemas
+
+
+def cruces_entre_lineas(dg):
+    """Veces que se cortan tramos de lineas distintas (sin contar los extremos)."""
+    def lado(a, b, c):
+        v = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        return (v > 1e-9) - (v < -1e-9)
+    lineas = [P._puntos(v) for v in dg['ownedViews'] if 'points' in v]
+    return sum(lado(p, q, r) * lado(p, q, s) < 0 and lado(r, s, p) * lado(r, s, q) < 0
+               for i, pa in enumerate(lineas) for pb in lineas[i + 1:]
+               for p, q in zip(pa, pa[1:]) for r, s in zip(pb, pb[1:]))
+
+
 def test_programa_java_en_proyecto_nuevo(programa, tmp_path):
     mdj = str(tmp_path / 'tienda.mdj')
     r = ok(tool('staruml_programa_a_diagrama', archivo=mdj, ruta_codigo=programa))
@@ -211,10 +246,83 @@ def test_programa_grande_sin_encimar_ni_cruzar(tmp_path, semilla):
     dg = doc.diagram('Diagrama de clases')
     modelos = [v['model']['$ref'] for v in vistas_de_cajas(dg)]
     assert len(modelos) == len(set(modelos)) == r['clases'] + r['interfaces']
+    # tan denso, alguna etiqueta puede quedar sobre una linea, pero ninguna sobre una caja ni sobre otra etiqueta
+    assert [p for p in choques_de_etiquetas(dg) if 'sobre una linea' not in p] == []
     geometria_limpia(doc, dg)
     assert ids_integros(mdj)
     cmp = C.comparar_diagrama_con_codigo(doc, 'Diagrama de clases', codigo, 'java')
     assert cmp['porcentaje_sincronizacion'] == 100.0
+
+
+def test_mismo_programa_mismo_diagrama(tmp_path, monkeypatch):
+    # el acomodo no depende de los ids, que salen del reloj: el mismo programa en otro momento da el mismo dibujo
+    codigo = _programa_aleatorio(str(tmp_path / 'app'), 25, 3)
+    reloj, dibujos = time.time, []
+    for k in range(2):
+        monkeypatch.setattr(time, 'time', lambda: reloj() + 7777.777 * k)
+        mdj = str(tmp_path / f'app{k}.mdj')
+        ok(tool('staruml_programa_a_diagrama', archivo=mdj, ruta_codigo=codigo))
+        doc = M.Doc(mdj)
+        dg = doc.diagram('Diagrama de clases')
+        cajas = sorted((doc.name_of(v['model']['$ref']), P._caja(v)) for v in vistas_de_cajas(dg))
+        dibujos.append((cajas, sorted(v['points'] for v in dg['ownedViews'] if 'points' in v)))
+    assert dibujos[0] == dibujos[1]
+
+
+def test_etiquetas_de_los_extremos_sin_tocar_nada(programa, tmp_path):
+    # antes quedaban con el alpha y distance de la plantilla: 10 sobre lineas y 6 encimadas en este programa
+    mdj = str(tmp_path / 'tienda.mdj')
+    ok(tool('staruml_programa_a_diagrama', archivo=mdj, ruta_codigo=programa))
+    doc = M.Doc(mdj)
+    dg = doc.diagram('Diagrama de clases')
+    assert choques_de_etiquetas(dg) == [] and cruces_entre_lineas(dg) == 0
+
+
+def test_varias_asociaciones_al_mismo_par_van_en_paralelo(tmp_path):
+    # tres campos del mismo tipo: cada linea con sus puertos y su carril (antes eran la misma ruta corrida 16 px y sus
+    # etiquetas se encimaban); el lazo de Nodo deja lugar a sus etiquetas junto a la caja vecina
+    codigo = fuentes(str(tmp_path / 'app'), {
+        'app/Persona.java': 'package app;\npublic class Persona { private String nombre; }\n',
+        'app/Linea.java': 'package app;\npublic class Linea { private int cantidad; }\n',
+        'app/Pedido.java': 'package app;\npublic class Pedido {\n    private Persona cliente;\n    private Persona vendedor;\n'
+                           '    private Persona repartidor;\n    private java.util.List<Linea> lineas;\n}\n',
+        'app/Nodo.java': 'package app;\npublic class Nodo { private Nodo siguiente; private Persona duenio; }\n',
+        'app/Vecino.java': 'package app;\npublic class Vecino { private Persona contacto; }\n'})
+    mdj = str(tmp_path / 'app.mdj')
+    r = ok(tool('staruml_programa_a_diagrama', archivo=mdj, ruta_codigo=codigo))
+    assert r['asociaciones'] == 7 and r['diagramas'][0]['lineas_que_cruzan_cajas'] == []
+    doc = M.Doc(mdj)
+    dg = doc.diagram('Diagrama de clases')
+    geometria_limpia(doc, dg)
+    nombre = {v['_id']: doc.name_of(v['model']['$ref']) for v in vistas_de_cajas(dg)}
+    a_persona = [v['points'] for v in dg['ownedViews'] if v['_type'] == 'UMLAssociationView' and
+                 {nombre[v['tail']['$ref']], nombre[v['head']['$ref']]} == {'Pedido', 'Persona'}]
+    assert len(a_persona) == len(set(a_persona)) == 3
+    assert choques_de_etiquetas(dg) == [] and cruces_entre_lineas(dg) == 0
+
+
+@pytest.mark.parametrize('izquierda', ['a', 'b'])
+def test_dos_lineas_entre_cajas_de_la_misma_fila_no_se_cruzan(izquierda):
+    # suben al canal de arriba una dentro de otra, sea a la caja de la izquierda o la de la derecha
+    x = {izquierda: 0, ({'a', 'b'} - {izquierda}).pop(): 400}
+    cajas = {'arr': (150, 0, 350, 100), 'a': (x['a'], 220, x['a'] + 200, 320), 'b': (x['b'], 220, x['b'] + 200, 320)}
+    geo = {'tops': [0, 220], 'altos': [100, 100], 'canales': [120, 120], 'capa': {'arr': 0, 'a': 1, 'b': 1},
+           'cadenas': {}, 'mismas': [('a', 'b')], 'huecos': {}}
+    sal = P.rutas(cajas, [geo], copias={frozenset(('a', 'b')): 2})
+    lineas = [[(m[0][0], 220)] + m + [(m[-1][0], 220)] for m in (sal[('a', 'b', 0)], sal[('a', 'b', 1)])]
+    assert cruces_entre_lineas({'ownedViews': [{'points': ';'.join(f'{x}:{y}' for x, y in pts)} for pts in lineas]}) == 0
+
+
+def test_orden_de_las_filas_con_menos_cruces():
+    # a y b arriba, c y d abajo, a-d y b-c se cruzan: intercambiar dos vecinas lo quita
+    filas = [['a', 'b'], ['c', 'd']]
+    arriba_de = {'a': [], 'b': [], 'c': ['b'], 'd': ['a']}
+    abajo_de = {'a': ['d'], 'b': ['c'], 'c': [], 'd': []}
+    assert P._cruces_orden(filas, arriba_de, []) == 1
+    P._intercambiar(filas, arriba_de, abajo_de, {n: [] for n in 'abcd'})
+    assert P._cruces_orden(filas, arriba_de, []) == 0
+    # una linea entre cajas de la misma fila cuenta las cajas que quedan en medio
+    assert P._cruces_orden([['a', 'b', 'c']], {'a': [], 'b': [], 'c': []}, [('a', 'c')]) == 1
 
 
 def test_otro_lenguaje_y_errores(tmp_path):

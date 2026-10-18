@@ -231,6 +231,25 @@ def test_lineas_de_una_entidad_a_sus_vecinas_no_se_cruzan(vacio, orden):
     assert _cruces([pts for _, t, _, pts in _lineas(doc, doc.diagram('Analisis')) if t == 'Padre']) == 0
 
 
+def test_lineas_del_dominio_no_se_cruzan_si_el_orden_de_las_filas_lo_evita(vacio):
+    # el orden por baricentro dejaba un cruce entre Factura-Producto y Linea-Almacen; ahora se queda con el orden de
+    # menos cruces y luego intercambia cajas vecinas mientras eso quite cruces
+    asociaciones = [('Categoria', '*', 'Direccion', '*'), ('Categoria', '1..*', 'Factura', '1'),
+                    ('Categoria', '', 'Linea', '1..*'), ('Cliente', '1..*', 'Almacen', '1'),
+                    ('Direccion', '0..1', 'Cliente', ''), ('Factura', '0..1', 'Direccion', '1'),
+                    ('Factura', '0..1', 'Producto', '1'), ('Linea', '1', 'Almacen', '0..1'), ('Linea', '*', 'Factura', '*')]
+    dg = _diagrama(vacio)
+    r = ok(tool('mdj_robustez_generar', archivo=vacio, diagrama=dg, paquete='Analisis', actores=[{'nombre': 'Usuario'}],
+                pantallas=[{'nombre': 'Pantalla'}], control={'nombre': 'Control'},
+                entidades=[{'nombre': n} for n in ('Categoria', 'Factura', 'Direccion', 'Linea', 'Producto', 'Cliente',
+                                                   'Almacen')],
+                asociaciones=[{'desde': a, 'hasta': b, 'mult_desde': ma, 'mult_hacia': mb}
+                              for a, ma, b, mb in asociaciones]))
+    assert r['lineas_que_cruzan_cajas'] == [] and r['etiquetas_que_chocan'] == []
+    doc = M.Doc(vacio)
+    assert _cruces([pts for *_, pts in _lineas(doc, doc.diagram('Analisis'))]) == 0
+
+
 def test_lazo_por_abajo_conserva_su_ancho(vacio):
     # con lineas por arriba el lazo va por abajo. StarUML dibuja los lazos rectilineos, pero si el archivo dice
     # oblicuo primero los calcula asi y por abajo los angosta: las etiquetas de sus dos extremos se enciman
@@ -445,3 +464,28 @@ def test_staruml_dibuja_un_analisis_completo_sin_encimar_nada(vacio, tmp_path, s
     svg = ok(tool('staruml_exportar', archivo=vacio, carpeta=str(tmp_path / 'svg'), diagrama=dg))['archivos'][0]
     rev = ok(tool('svg_revisar', svg=svg, archivo=vacio, diagrama=dg))
     assert rev['n_problemas'] == 0, rev['problemas']
+
+
+def test_depende_de_usa_la_asociacion_que_ya_esta_en_el_modelo(vacio):
+    """La asociacion entre la dependiente y su padre no hay que repetirla si ya existe en el modelo: se dibuja como
+    esta, sin crear otra ni cambiarle nada."""
+    dg = _diagrama(vacio)
+    ok(tool('mdj_robustez_generar', archivo=vacio, diagrama=dg, paquete='Analisis', **_caso()))
+    doc = M.Doc(vacio)
+    par = lambda o: {doc.name_of(o['end1']['reference']['$ref']), doc.name_of(o['end2']['reference']['$ref'])}
+    antes = [o for o in doc.ids.values() if o and o.get('_type') == 'UMLAssociation' and par(o) == {'Pedido', 'LineaPedido'}]
+    assert len(antes) == 1
+    segundo = M.crear_diagrama(doc, 'clases', 'cu_1 sin repetir', dentro_de='Analisis')
+    doc.save(backup=False)
+    caso = _caso()
+    caso['asociaciones'] = [a for a in caso['asociaciones'] if 'LineaPedido' not in (a['desde'], a['hasta'])]
+    r = ok(tool('mdj_robustez_generar', archivo=vacio, diagrama=segundo['_id'], paquete='Analisis', **caso))
+    doc = M.Doc(vacio)
+    par = lambda o: {doc.name_of(o['end1']['reference']['$ref']), doc.name_of(o['end2']['reference']['$ref'])}
+    despues = [o for o in doc.ids.values() if o and o.get('_type') == 'UMLAssociation' and par(o) == {'Pedido', 'LineaPedido'}]
+    assert [o['_id'] for o in despues] == [antes[0]['_id']]  # la misma, sin duplicar
+    assert despues[0]['end1'] == antes[0]['end1'] and despues[0]['end2'] == antes[0]['end2']  # sin cambios
+    vistas = [v for v in doc.diagram(segundo['_id'])['ownedViews'] if v['_type'] == 'UMLAssociationView'
+              and v['model']['$ref'] == antes[0]['_id']]
+    assert len(vistas) == 1 and r['oose']['problemas'] == []
+    assert ids_integros(vacio)

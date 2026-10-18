@@ -32,12 +32,13 @@ NAVEGABLE = ('hacia', 'ambos', 'ninguno', 'desde')
 NAVEGA = {(False, True): 'hacia', (True, True): 'ambos', (False, False): 'ninguno', (True, False): 'desde'}
 
 
+# etiquetas y orden de carriles viven en programa (tambien los usa el diagrama de un programa)
+_ancho_etiqueta, _orden_canal = P._ancho_etiqueta, P._orden_canal
+_poner_etiqueta, _centro_etiqueta = P._poner_etiqueta, P._centro_etiqueta
+
+
 def _ancho(nombre, textos=()):
     return round(max([M.ancho13(nombre) * 1.15 + 24, 90] + [M.ancho13(x) + 24 for x in textos]))
-
-
-def _ancho_etiqueta(texto):
-    return M.ancho13(texto) + 2 if texto else 0
 
 
 def _ancho11(texto):
@@ -152,10 +153,8 @@ def _validar(actores, pantallas, control, entidades, asociaciones, generalizacio
         if ent[padre].get('depende_de'):
             raise MdjError(f'{e["nombre"]}: depende de {padre}, que tambien es dependiente; '
                            'debe depender de una entidad que use el control')
-        # sin una asociacion entre las dos nada alcanzaria a la dependiente (el control no se une a ella)
-        if not any({a['desde'], a['hasta']} == {e['nombre'], padre} for a in asociaciones):
-            raise MdjError(f'{e["nombre"]} depende de {padre}, pero no hay una asociacion entre las dos: agregala '
-                           'en asociaciones (es el camino por el que se llega a ella)')
+        # la asociacion entre las dos (el camino por el que se llega a la dependiente) puede venir en la lista o ya
+        # existir en el modelo: eso se revisa en generar_robustez, cuando ya se conocen los elementos
     pares = []
     for g in generalizaciones:
         h, p = g.get('hijo'), g.get('padre')
@@ -433,49 +432,6 @@ def _ancho_lado(lista):
     return math.ceil(min(centrado, total + 40))
 
 
-def _orden_canal(pedidos):
-    """Orden de arriba abajo de los carriles de un canal para que las lineas no se crucen cuando se puede: si un tramo
-    vertical de una linea que sube a la fila de arriba cae dentro del tramo horizontal de otra, va arriba de ella; si
-    baja a la fila de abajo, debajo. Si una linea sube y baja dentro del tramo de otra (la cruza de lado a lado) el
-    cruce no se puede evitar y no pone condicion. Si aun asi las condiciones se contradicen (un ciclo) se rompe el
-    ciclo que no espera a ninguna otra linea, por la que tiene menos pendientes; a igualdad, en el orden en que se
-    pidieron."""
-    n = len(pedidos)
-    arriba_de = {i: set() for i in range(n)}  # los que deben ir arriba de i
-    for a, pa in enumerate(pedidos):
-        xs = pa['sube_a'] + pa['baja_a']
-        lo, hi = min(xs), max(xs)
-        for b, pb in enumerate(pedidos):
-            if a == b:
-                continue
-            sube = any(lo < x < hi for x in pb['sube_a'])
-            baja = any(lo < x < hi for x in pb['baja_a'])
-            if sube and not baja:
-                arriba_de[a].add(b)
-            elif baja and not sube:
-                arriba_de[b].add(a)
-    def ancestros(i, resto):
-        vistos, pila = set(), [i]
-        while pila:
-            for k in arriba_de[pila.pop()] & resto:
-                if k not in vistos:
-                    vistos.add(k)
-                    pila.append(k)
-        return vistos
-    orden, quedan = [], list(range(n))
-    while quedan:
-        resto = set(quedan)
-        libres = [i for i in quedan if not arriba_de[i] & resto]
-        if not libres:
-            # en un ciclo que no depende de otras lineas: todos sus ancestros dependen a su vez de ella
-            anc = {i: ancestros(i, resto) for i in quedan}
-            libres = [i for i in quedan if all(i in anc[k] for k in anc[i])]
-        j = min(libres, key=lambda i: (len(arriba_de[i] & resto), i))
-        orden.append(j)
-        quedan.remove(j)
-    return [pedidos[i] for i in orden]
-
-
 def _dominio(nombres, tam, lineas, etiquetas, controladas):
     """Acomoda y rutea el modelo de dominio desde (0, 0). lineas: [(clave, x, z)] (x queda arriba de z si se puede: el
     que navega o el padre); etiquetas: {(clave, 'x'|'z'): (izq, der)}. Devuelve (posiciones, tam con las cajas
@@ -654,19 +610,6 @@ def _puntos(v):
     return [tuple(float(n) for n in q.split(':')) for q in (v.get('points') or '').split(';') if ':' in q]
 
 
-def _poner_etiqueta(v, lab, centro):
-    """StarUML pone el centro de la etiqueta en p1 + distance * (cos(t - alpha), sin(t - alpha)), con p1 el extremo de
-    la linea y t el angulo de p1 hacia el punto vecino: se calculan alpha y distance para que quede en centro."""
-    pts = _puntos(v)
-    p1, p2 = (pts[0], pts[1]) if lab.get('edgePosition') == 2 else (pts[-1], pts[-2])
-    t = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
-    a = t - math.atan2(centro[1] - p1[1], centro[0] - p1[0])
-    lab['alpha'] = math.atan2(math.sin(a), math.cos(a))
-    lab['distance'] = round(math.hypot(centro[0] - p1[0], centro[1] - p1[1]), 2)
-    lab['left'] = round(centro[0] - (lab.get('width') or 0) / 2)
-    lab['top'] = round(centro[1] - 6.5)
-
-
 def _rectilinea(v, vt, vh):
     """Una linea con todos sus tramos horizontales o verticales se guarda rectilinea (lineStyle 0): asi StarUML baja
     cada extremo en perpendicular al borde desde el punto vecino. En oblicua lo apunta al centro de la caja y, si el
@@ -696,14 +639,6 @@ def _rectilinea(v, vt, vh):
     v['points'] = ';'.join(f'{x}:{y}' for x, y in limpios)
     v['lineStyle'] = 0
     return True
-
-
-def _centro_etiqueta(v, lab):
-    pts = _puntos(v)
-    p1, p2 = (pts[0], pts[1]) if lab.get('edgePosition') == 2 else (pts[-1], pts[-2])
-    t = math.atan2(p2[1] - p1[1], p2[0] - p1[0]) - (lab.get('alpha') or 0)
-    d = lab.get('distance') or 0
-    return (p1[0] + d * math.cos(t), p1[1] + d * math.sin(t))
 
 
 def _etiquetas(v, inv, a, puertos, clave, vistas, dx, volteada=False):
@@ -773,8 +708,8 @@ def generar_robustez(doc, diagrama, paquete, actores, pantallas, control, entida
     pantallas: [{nombre, documentacion?, nota?}] de arriba abajo; nota: texto de una nota debajo de la pantalla
     control: {nombre, documentacion?}
     entidades: [{nombre, atributos?, documentacion?, depende_de?}]  (depende_de: entidad que solo se alcanza desde
-               otra por una asociacion entre las dos; queda debajo de ella y con lineas_control el control no se une
-               a ella)
+               otra por una asociacion entre las dos, que puede venir en asociaciones o ya existir en el modelo;
+               queda debajo de ella y con lineas_control el control no se une a ella)
     asociaciones: [{desde, hasta, mult_desde?, mult_hacia?, rol_desde?, rol_hacia?, navegable?}] entre entidades;
                navegable 'hacia' por defecto (flecha de desde a hasta); el extremo que navega queda arriba.
                desde == hasta es una asociacion reflexiva.
@@ -808,6 +743,21 @@ def generar_robustez(doc, diagrama, paquete, actores, pantallas, control, entida
     for n, el in els.items():
         if doc.views_of(el['_id'], dg):
             raise MdjError(f'{n} ya esta dibujado en {dg.get("name")}: usa un diagrama vacio')
+
+    # una entidad dependiente necesita una asociacion con la entidad de la que depende (el control no se une a ella).
+    # Si no viene en la lista pero ya existe en el modelo, se usa esa tal como esta (no hay que repetirla)
+    for e in entidades:
+        padre = e.get('depende_de')
+        if not padre or any({a['desde'], a['hasta']} == {e['nombre'], padre} for a in asociaciones):
+            continue
+        ya = any(o and o.get('_type') == 'UMLAssociation' and
+                 {(o.get('end1') or {}).get('reference', {}).get('$ref'),
+                  (o.get('end2') or {}).get('reference', {}).get('$ref')} == {els[e['nombre']]['_id'], els[padre]['_id']}
+                 for o in doc.ids.values())
+        if not ya:
+            raise MdjError(f'{e["nombre"]} depende de {padre}, pero no hay una asociacion entre las dos: agregala '
+                           'en asociaciones (es el camino por el que se llega a ella)')
+        asociaciones.append({'desde': padre, 'hasta': e['nombre']})
 
     # asociaciones entre entidades: se resuelven antes de acomodar, porque una que ya existe se dibuja con lo que
     # tiene en el modelo. Entre varias del mismo par escogen primero las que piden roles y luego las que piden mas
