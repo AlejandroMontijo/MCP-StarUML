@@ -22,10 +22,13 @@ def test_guardar_reproduce_el_archivo_byte_a_byte(real):
 
 
 def regla_metodos(path):
-    """Si el equipo puso metodos en el control (y get/set en las entity), se valida con ese criterio."""
+    """El criterio de metodos del equipo: si alguna entity tiene metodos que no son get/set (p. ej. los de persistencia
+    que le pide el control), control_entidad; si el control tiene metodos (y las entity get/set), control_getset."""
     doc = M.Doc(path)
-    con_metodos = any(o.get('operations') for o in doc.ids.values()
-                      if o and o.get('_type') == 'UMLClass' and doc.kind(o) == 'control')
+    clases = [o for o in doc.ids.values() if o and o.get('_type') == 'UMLClass']
+    if any(M._no_accesores(o) for o in clases if doc.kind(o) == 'entity'):
+        return 'control_entidad'
+    con_metodos = any(o.get('operations') for o in clases if doc.kind(o) == 'control')
     return 'control_getset' if con_metodos else 'ninguno'
 
 

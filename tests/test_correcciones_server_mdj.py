@@ -1,12 +1,12 @@
 # Correcciones del servidor y de staruml_mdj: esquema de mdj_robustez_generar (actor secundario y generalizaciones),
 # descripciones que prometian mas de lo que hace el codigo, sobre en mdj_dibujar, clases y paquetes repetidos y el
-# modo de metodos de la regla OOSE (control_getset).
+# modos de metodos de la regla OOSE (control_getset y control_entidad).
 import os
 import shutil
 
 import pytest
 
-from apoyo import RAIZ, M, S, ids_integros, ok, tool
+from apoyo import LIFELINES, MENSAJES, RAIZ, M, S, ids_integros, ok, tool
 
 from staruml_mcp import uml as U
 
@@ -200,25 +200,28 @@ def test_nombre_libre_compara_tipos_con_el_metamodelo():
 
 
 # ---------------------------------------------------------------------------
-# mdj_validar: metodos = ninguno | control_getset
+# mdj_validar: metodos = ninguno | control_getset | control_entidad
 # ---------------------------------------------------------------------------
+
+def _poner_metodos(path, metodos):
+    """Deja a cada clase ({nombre: [operaciones]}) solo con esas operaciones, sin parametros."""
+    doc = M.Doc(path)
+    for clase, nombres in metodos.items():
+        c = doc.find(clase)
+        c['operations'] = [{'_type': 'UMLOperation', '_id': doc.new_id(), '_parent': M.ref(c['_id']), 'name': n}
+                           for n in nombres]
+    doc.reindex()
+    doc.save(backup=False)
+    return path
+
 
 def _con_metodos(path):
     """Cuenta (entity) con get/set/is de sus atributos y un metodo de negocio; el control con metodos; la boundary con
     uno; y Sesion (entity) con un get de un atributo que no es suyo."""
-    doc = M.Doc(path)
-
-    def ops(clase, nombres):
-        c = doc.find(clase)
-        c['operations'] = [{'_type': 'UMLOperation', '_id': doc.new_id(), '_parent': M.ref(c['_id']), 'name': n}
-                           for n in nombres]
-    ops('Cuenta', ['getUsuario', 'setUsuario', 'isContraseña', 'validarAcceso'])
-    ops('Control Autenticación', ['autenticar', 'cerrarSesion'])
-    ops('Pantalla Autenticación', ['mostrar'])
-    ops('Sesión', ['getInicio', 'getUsuario'])
-    doc.reindex()
-    doc.save(backup=False)
-    return path
+    return _poner_metodos(path, {'Cuenta': ['getUsuario', 'setUsuario', 'isContraseña', 'validarAcceso'],
+                                 'Control Autenticación': ['autenticar', 'cerrarSesion'],
+                                 'Pantalla Autenticación': ['mostrar'],
+                                 'Sesión': ['getInicio', 'getUsuario']})
 
 
 def _metodos(problemas):
@@ -256,18 +259,82 @@ def test_validar_control_getset_sin_metodos_de_mas(modelo):
     assert _metodos(ok(tool('mdj_validar', archivo=modelo))['oose']['problemas'])
 
 
+def test_validar_control_entidad(modelo):
+    _con_metodos(modelo)
+    probs = _metodos(ok(tool('mdj_validar', archivo=modelo, metodos='control_entidad'))['oose']['problemas'])
+    assert probs == ['Pantalla Autenticación (boundary) tiene metodos; solo el control y las entity llevan metodos']
+
+
+def test_validar_control_entidad_con_metodos_de_persistencia(modelo):
+    """Las entity con los metodos que les pide el control (guardarX, consultarX, actualizarX) pasan con
+    control_entidad; control_getset las marca porque no son get/set y ninguno porque en analisis no van metodos."""
+    _poner_metodos(modelo, {'Control Autenticación': ['autenticar', 'validarCredenciales'],
+                            'Cuenta': ['consultarCuenta', 'actualizarEstado'], 'Sesión': ['guardarSesion']})
+    assert not _metodos(ok(tool('mdj_validar', archivo=modelo, metodos='control_entidad'))['oose']['problemas'])
+    getset = _metodos(ok(tool('mdj_validar', archivo=modelo, metodos='control_getset'))['oose']['problemas'])
+    assert getset == ["Cuenta (entity) tiene metodos que no son get/set/is de sus propios atributos: "
+                      "['consultarCuenta', 'actualizarEstado']",
+                      "Sesión (entity) tiene metodos que no son get/set/is de sus propios atributos: ['guardarSesion']"]
+    assert len(_metodos(ok(tool('mdj_validar', archivo=modelo))['oose']['problemas'])) == 3
+
+
+def test_validar_control_entidad_marca_actores_y_no_las_clases_de_diseno(modelo):
+    ok(tool('mdj_clase_crear', archivo=modelo, paquete='Analisis', nombre='Repositorio', estereotipo='ninguno'))
+    _poner_metodos(modelo, {'UMLActor:Usuario': ['iniciarSesion'], 'Repositorio': ['guardar', 'buscar'],
+                            'Cuenta': ['guardarCuenta']})
+    probs = _metodos(ok(tool('mdj_validar', archivo=modelo, metodos='control_entidad'))['oose']['problemas'])
+    assert probs == ['Usuario (actor) tiene metodos; solo el control y las entity llevan metodos']
+
+
+def test_esquemas_ofrecen_control_entidad():
+    for nombre in ('mdj_validar', 'mdj_secuencia_generar', 'mdj_robustez_generar'):
+        metodos = _herramienta(nombre)['inputSchema']['properties']['metodos']
+        assert metodos['enum'] == ['ninguno', 'control_getset', 'control_entidad'], nombre
+        assert 'control_entidad' in metodos['description'], nombre
+
+
+def test_secuencia_generar_revisa_con_control_entidad(modelo):
+    """La revision OOSE de la respuesta usa el criterio que se le pide, como mdj_validar."""
+    _poner_metodos(modelo, {'Control Autenticación': ['autenticar'], 'Cuenta': ['buscarCuenta'],
+                            'Sesión': ['crearSesion']})
+    spec = dict(archivo=modelo, diagrama='cu_1_FB', lifelines=LIFELINES, mensajes=MENSAJES)
+    assert not _metodos(ok(tool('mdj_secuencia_generar', metodos='control_entidad', **spec))['oose']['problemas'])
+    assert len(_metodos(ok(tool('mdj_secuencia_generar', metodos='control_getset', **spec))['oose']['problemas'])) == 2
+    assert len(_metodos(ok(tool('mdj_secuencia_generar', **spec))['oose']['problemas'])) == 3
+    assert ids_integros(modelo)
+
+
+def test_robustez_generar_revisa_con_control_entidad(vacio):
+    """El control y la entity que reusa ya tienen metodos: la respuesta los revisa con el criterio que se le pide."""
+    ok(tool('mdj_clase_crear', archivo=vacio, paquete='Analisis', nombre='ControlRenta', estereotipo='control'))
+    ok(tool('mdj_clase_crear', archivo=vacio, paquete='Analisis', nombre='Cliente', estereotipo='entity',
+            atributos=['nombre']))
+    _poner_metodos(vacio, {'ControlRenta': ['registrarCliente'], 'Cliente': ['guardarCliente']})
+    spec = dict(archivo=vacio, paquete='Analisis', actores=[{'nombre': 'Asesor', 'pantallas': ['BC_Registro']}],
+                pantallas=[{'nombre': 'BC_Registro'}], control={'nombre': 'ControlRenta'},
+                entidades=[{'nombre': 'Cliente'}])
+    r = ok(tool('mdj_robustez_generar', diagrama='cu_1', metodos='control_entidad', **spec))
+    assert not _metodos(r['oose']['problemas'])
+    ok(tool('mdj_diagrama_crear', archivo=vacio, tipo='clases', nombre='cu_1_otra_vez'))
+    r = ok(tool('mdj_robustez_generar', diagrama='cu_1_otra_vez', **spec))
+    assert len(_metodos(r['oose']['problemas'])) == 2
+    assert ids_integros(vacio)
+
+
 def test_validar_metodos_valor_invalido(modelo):
     r = tool('mdj_validar', archivo=modelo, metodos='todos')
-    assert 'metodos' in r['error'] and 'control_getset' in r['error']
+    assert 'metodos' in r['error'] and 'control_getset' in r['error'] and 'control_entidad' in r['error']
     with pytest.raises(M.MdjError, match='control_getset'):
         M.reglas_oose(M.Doc(modelo), 'todos')
 
 
-def test_validar_control_getset_en_el_modelo_real(tmp_path):
+def test_validar_metodos_del_equipo_en_el_modelo_real(tmp_path):
+    """Con control_entidad el modelo vigente no tiene metodos donde no van: el control con los suyos y las entity con
+    los de persistencia (o get/set)."""
     if not os.path.exists(REAL_VIGENTE):
         pytest.skip('sin el modelo real vigente')
     copia = str(tmp_path / 'real.mdj')
     shutil.copy(REAL_VIGENTE, copia)
-    r = ok(tool('mdj_validar', archivo=copia, metodos='control_getset'))
+    r = ok(tool('mdj_validar', archivo=copia, metodos='control_entidad'))
     assert not _metodos(r['oose']['problemas']), _metodos(r['oose']['problemas'])
     assert _bytes(copia) == _bytes(REAL_VIGENTE)

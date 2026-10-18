@@ -48,8 +48,14 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
 - Boundary y control sin atributos. Por omisión, en análisis ninguna clase lleva métodos: `mdj_validar`
   lo revisa en las clases con estereotipo de robustez (boundary, control, entity) y en los actores; las
   clases de diseño, sin esos estereotipos, sí llevan métodos. Si el equipo pone métodos en el análisis,
-  se valida con `metodos: "control_getset"`: el control puede tener métodos, cada entity solo
-  `getX`/`setX`/`isX` de sus propios atributos y las boundary ninguno.
+  `metodos` dice cuáles se admiten (en las boundary y los actores, ninguno):
+  - `"control_getset"`: el control puede tener métodos y cada entity solo `getX`/`setX`/`isX` de sus
+    propios atributos.
+  - `"control_entidad"`: el control y las entity pueden tener métodos, sin exigir que sean get/set; por
+    ejemplo, los de persistencia que el control le pide a cada entity (`guardarX`, `consultarX`,
+    `actualizarX`). Que los mensajes a cada entity sean operaciones suyas lo revisa
+    `mdj_secuencia_revisar` con `metodos: "todos"`, que también avisa de las operaciones que ningún
+    mensaje usa.
 - Una sola notación (la de íconos) en todo el proyecto. `mdj_validar` avisa de las vistas de
   robustez que no la usan, de los estereotipos guardados como texto y de las cajas encimadas.
 - Cada caso de uso se analiza en un paquete con su mismo nombre (sin importar acentos ni mayúsculas).

@@ -173,6 +173,14 @@ herramienta, para que quien la use obtenga el diagrama correcto a la primera:
   "ambiguo" si un caso de uso y un paquete se llaman igual; `mdj_dibujar` no ofrece la nota fuera de la paleta de clases
   (usar `mdj_nota`); las líneas del modelo de dominio pueden cruzarse entre sí (no sobre cajas).
 
+## 3f. Métodos de persistencia en las entity (2026-10-18)
+
+- `metodos: "control_entidad"` en `mdj_validar`, `mdj_secuencia_generar` y `mdj_robustez_generar`: el control y las
+  entity pueden tener cualquier método (p. ej. los de persistencia que el control le pide a cada entity: guardarX,
+  consultarX, actualizarX), sin exigir get/set; las boundary y los actores siguen sin métodos.
+- `regla_metodos` (`tests/test_modelo_real.py`) elige `control_entidad` si alguna entity tiene métodos que no son
+  get/set; si no, `control_getset` cuando el control tiene métodos, y si no, `ninguno`.
+
 ## 4. Convenciones y Reglas Inquebrantables
 
 1. **Reglas de Git:**
@@ -191,7 +199,7 @@ herramienta, para que quien la use obtenga el diagrama correcto a la primera:
    - Boundary solo interactúa con Actores y Control (nunca boundary con boundary ni boundary con entity).
    - Control interactúa con Boundary y Entity.
    - Entity solo interactúa con Entity si existe asociación explícita.
-   - Boundary y Control **sin atributos ni métodos** en fase de análisis (la regla de métodos aplica a las clases de robustez y actores; las de diseño sí llevan métodos).
+   - Boundary y Control **sin atributos ni métodos** en fase de análisis (la regla de métodos aplica a las clases de robustez y actores; las de diseño sí llevan métodos). Con `metodos` se admiten los del control (`control_getset`, entity solo get/set) o los del control y las entity (`control_entidad`).
 
 ---
 

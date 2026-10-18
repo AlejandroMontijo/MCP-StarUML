@@ -643,7 +643,7 @@ def _consistencia_casos_de_uso(doc, kinds):
     return avisos
 
 
-METODOS_OOSE = ('ninguno', 'control_getset')
+METODOS_OOSE = ('ninguno', 'control_getset', 'control_entidad')
 
 
 def _no_accesores(o):
@@ -666,7 +666,9 @@ def _no_accesores(o):
 def reglas_oose(doc, metodos='ninguno'):
     """Reglas de robustez. metodos: 'ninguno' (default): ninguna clase de analisis (boundary, control, entity) ni actor
     lleva metodos; 'control_getset': el control puede tener metodos, cada entity solo get/set/is de sus propios
-    atributos y las boundary y los actores ninguno."""
+    atributos y las boundary y los actores ninguno; 'control_entidad': el control y las entity pueden tener metodos
+    (p. ej. los de persistencia que el control le pide a cada entity: guardarX, consultarX, actualizarX), sin exigir
+    que sean get/set, y las boundary y los actores ninguno."""
     if metodos not in METODOS_OOSE:
         raise MdjError(f'metodos debe ser uno de {list(METODOS_OOSE)}, no {metodos!r}')
     prob, avisos = [], []
@@ -682,14 +684,15 @@ def reglas_oose(doc, metodos='ninguno'):
         if o.get('operations') and k in ('boundary', 'control', 'entity', 'actor'):
             if metodos == 'ninguno':
                 prob.append(f'{nombre} ({k}) tiene metodos; en analisis no se ponen metodos')
-            elif k == 'entity':
+            elif k in ('boundary', 'actor'):
+                quienes = ('solo el control lleva metodos y las entity get/set de sus atributos'
+                           if metodos == 'control_getset' else 'solo el control y las entity llevan metodos')
+                prob.append(f'{nombre} ({k}) tiene metodos; {quienes}')
+            elif k == 'entity' and metodos == 'control_getset':
                 otros = _no_accesores(o)
                 if otros:
                     prob.append(f'{nombre} (entity) tiene metodos que no son get/set/is de sus propios atributos: '
                                 f'{otros}')
-            elif k != 'control':
-                prob.append(f'{nombre} ({k}) tiene metodos; solo el control lleva metodos y las entity get/set de '
-                            'sus atributos')
         if k in ('boundary', 'control') and o.get('attributes'):
             prob.append(f'{o.get("name", "(sin nombre)")} ({k}) tiene atributos; boundary y control van sin atributos')
     # un control por paquete

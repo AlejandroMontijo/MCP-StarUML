@@ -206,7 +206,12 @@ def t_buscar(a):
                         description='Que metodos admite la regla OOSE. ninguno (default): ni boundary, ni control, ni '
                                     'entity, ni actores llevan metodos. control_getset: el control puede tener metodos, '
                                     'cada entity solo get/set/is de sus propios atributos (getX, setX, isX; se mira el '
-                                    'nombre, no los parametros) y las boundary y los actores ninguno')}, ['archivo']),
+                                    'nombre, no los parametros) y las boundary y los actores ninguno. control_entidad: '
+                                    'el control y las entity pueden tener metodos (p. ej. los de persistencia que el '
+                                    'control le pide a cada entity: guardarX, consultarX, actualizarX), sin exigir que '
+                                    'sean get/set, y las boundary y los actores ninguno; que cada mensaje a una entity '
+                                    'sea una operacion suya lo revisa mdj_secuencia_revisar con metodos=todos')},
+          ['archivo']),
       ro('Validar'))
 def t_validar(a):
     doc = M.Doc(a['archivo'])
@@ -604,8 +609,9 @@ def t_diagrama_generar(a):
                                                                 'del padre, que queda arriba',
                                 'items': obj({'hijo': S(), 'padre': S()}, ['hijo', 'padre'])},
            'lineas_control': B(description='Dibujar tambien control -> entidad (default false)'),
-           'metodos': S(enum=list(M.METODOS_OOSE), description='Que metodos admite la revision OOSE de la respuesta '
-                                                              '(como en mdj_validar; default ninguno)'),
+           'metodos': S(enum=list(M.METODOS_OOSE), description='Que metodos admite la revision OOSE de la respuesta: '
+                                                              'ninguno (default), control_getset o control_entidad, '
+                                                              'como en mdj_validar'),
            'salida': SALIDA, 'forzar': FORZAR},
           ['archivo', 'diagrama', 'paquete', 'actores', 'pantallas', 'control', 'entidades']),
       rw('Generar robustez', destructive=True))  # reemplaza atributos y documentacion de lo que reusa
@@ -899,8 +905,9 @@ def t_nota(a):
                                                       ['de', 'a', 'nombre'])},
            'opciones': {'type': 'object', 'description': 'y_inicio, espaciado [a,b], espaciado_izq_der [a,b], extra_flujo [a,b], '
                                                          'semilla, margen_etiqueta, separacion_minima'},
-           'metodos': S(enum=list(M.METODOS_OOSE), description='Que metodos admite la revision OOSE de la respuesta '
-                                                              '(como en mdj_validar; default ninguno)'),
+           'metodos': S(enum=list(M.METODOS_OOSE), description='Que metodos admite la revision OOSE de la respuesta: '
+                                                              'ninguno (default), control_getset o control_entidad, '
+                                                              'como en mdj_validar'),
            'salida': SALIDA, 'forzar': FORZAR}, ['archivo', 'diagrama', 'lifelines', 'mensajes']),
       rw('Generar secuencia', destructive=True))
 def t_sec_generar(a):
