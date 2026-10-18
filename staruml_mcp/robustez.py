@@ -16,7 +16,7 @@ from . import programa as P
 from .mdj import MdjError, ref
 
 ANCHO_NOTA = 230          # ancho de una nota larga (mas si una palabra no cabe)
-ALTO_PANTALLA, ALTO_ACTOR = 65, 80
+ALTO_ACTOR = 80
 SEP_ACTOR, SEP_CONTROL, SEP_DOMINIO = 170, 170, 170  # espacio entre columnas
 CODO = 18                 # una linea doblada entra a la pantalla con un tramo horizontal desde aqui
 SEP_GRUPOS = 110          # entre grupos de entidades sin relacion entre si
@@ -769,14 +769,13 @@ def generar_robustez(doc, diagrama, paquete, actores, pantallas, control, entida
                                    pedidos[i])
     queda = {i: _como_queda(asoc, inv) for i, (asoc, inv, _) in resueltas.items()}
 
-    # tamanos: las entidades con lo que de verdad muestran sus vistas. Se dibujan primero (y despues del acomodo se
-    # mueven a su lugar) porque vista_nueva copia el estilo de otra vista: si esa muestra las operaciones, la entidad
-    # tambien, y StarUML agrandaria la caja que solo se midiera con los atributos (las lineas y sus etiquetas
-    # quedarian donde no se calcularon)
+    # tamanos: cada caja con lo que de verdad muestra su vista. Pantallas, control y entidades se dibujan primero (y
+    # despues del acomodo se mueven a su lugar) porque vista_nueva copia el estilo de otra vista: si esa muestra las
+    # operaciones (o los atributos), la nueva tambien, y StarUML agrandaria la caja que no las contara (las lineas, las
+    # notas y las etiquetas quedarian donde no se calcularon)
     tam = {a['nombre']: (_ancho(a['nombre']), ALTO_ACTOR) for a in actores}
-    tam.update({n: (_ancho(n), ALTO_PANTALLA) for n in pant_nombres + [ctrl]})
     vistas = {}
-    for n in ent_nombres:
+    for n in pant_nombres + [ctrl] + ent_nombres:
         vistas[n] = M.vista_nueva(doc, dg, els[n], 0, 0)
         tam[n] = (_ancho(n, M.renglones_vista(doc, vistas[n], els[n])), M.alto_minimo_vista(vistas[n], els[n]))
 
@@ -810,7 +809,7 @@ def generar_robustez(doc, diagrama, paquete, actores, pantallas, control, entida
         if p.get('nota'):
             t, w, h = _medidas_nota(p['nota'])
             notas[p['nombre']] = (t, w, h + random.randint(1, 4))
-    paso = [ALTO_PANTALLA + (notas[n][2] + 12 if n in notas else 0) + 50 for n in pant_nombres]
+    paso = [tam[n][1] + (notas[n][2] + 12 if n in notas else 0) + 50 for n in pant_nombres]
     alto_p = sum(paso) - 50
     centro = 40 + max(alto_e, alto_p, 300) / 2
     w_act = max(tam[a['nombre']][0] for a in actores)
@@ -821,8 +820,8 @@ def generar_robustez(doc, diagrama, paquete, actores, pantallas, control, entida
     for n, dy_ in zip(pant_nombres, paso):
         pos[n] = (xc - tam[n][0] / 2, y)
         y += dy_
-    cy = {n: pos[n][1] + ALTO_PANTALLA / 2 for n in pant_nombres}
-    pos[ctrl] = (xc + der_col + SEP_CONTROL, sum(cy.values()) / len(cy) - ALTO_PANTALLA / 2)
+    cy = {n: pos[n][1] + tam[n][1] / 2 for n in pant_nombres}
+    pos[ctrl] = (xc + der_col + SEP_CONTROL, sum(cy.values()) / len(cy) - tam[ctrl][1] / 2)
     deseo = sorted((sum(cy[p] for p in (a.get('pantallas') or pant_nombres)) / len(a.get('pantallas') or pant_nombres)
                     - ALTO_ACTOR / 2, i) for i, a in enumerate(actores))
     ys = [d for d, _ in deseo]
@@ -843,7 +842,7 @@ def generar_robustez(doc, diagrama, paquete, actores, pantallas, control, entida
     pos = {n: (round(x), round(y_)) for n, (x, y_) in pos.items()}
     dx, dy = round(dx), round(dy)
     pos.update({n: (x + dx, y_ + dy) for n, (x, y_) in pos_e.items()})
-    cy = {n: pos[n][1] + ALTO_PANTALLA / 2 for n in pant_nombres}
+    cy = {n: pos[n][1] + tam[n][1] / 2 for n in pant_nombres}
 
     for n, (x, y_) in pos.items():
         if n in vistas:
@@ -854,7 +853,7 @@ def generar_robustez(doc, diagrama, paquete, actores, pantallas, control, entida
     for n in pant_nombres:
         if n in notas:
             t, w, h = notas[n]
-            x0, y0 = round(xc - 40), pos[n][1] + ALTO_PANTALLA + 12
+            x0, y0 = round(xc - 40), pos[n][1] + tam[n][1] + 12
             M.nota(doc, dg, t, x0, y0, w, h)
             cajas_nota.append((x0, y0, x0 + w, y0 + h))
 

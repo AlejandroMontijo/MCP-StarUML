@@ -204,12 +204,16 @@ herramienta, para que quien la use obtenga el diagrama correcto a la primera:
   alto con que StarUML la dibuja (`alto_minimo_vista`): ícono 40, nombre 25 y, por cada compartimento que se ve,
   15 por renglón más 8 (vacío, 10). Qué compartimentos se ven lo decide StarUML con `suppressAttributes` y
   `suppressOperations`, no con el `visible` guardado en cada compartimento (`muestra_compartimentos`).
-- `mdj_robustez_generar` dibuja primero las entidades y las mide con lo que muestran (`renglones_vista`,
-  `alto_minimo_vista`); después del acomodo las mueve a su lugar. Con un modelo real cuyas entity muestran sus
+- `mdj_robustez_generar` dibuja primero las pantallas, el control y las entidades y los mide con lo que muestran
+  (`renglones_vista`, `alto_minimo_vista`); después del acomodo los mueve a su lugar. La columna de pantallas, sus
+  notas y la altura del control usan esas medidas (antes, 65 fijo). Con un modelo real cuyas entity muestran sus
   métodos medía solo los atributos, StarUML agrandaba las cajas y las cinco líneas que salen por abajo de una entidad
-  salían por los lados, con sus "1" encimados (`svg_revisar`: línea sobre texto y textos encimados). No era el
-  pendiente de etiquetas en el mismo canal de 3d. Lo cubren `test_entidades_que_muestran_operaciones_se_miden_con_ellas`
-  y, con StarUML, `test_staruml_dibuja_limpia_una_entidad_con_cinco_lineas_por_abajo_que_muestra_operaciones`.
+  salían por los lados, con sus "1" encimados (`svg_revisar`: línea sobre texto y textos encimados); no venía del
+  reparto de etiquetas en el mismo canal (§3d). Un control que copia la vista de otro que muestra sus métodos también
+  quedaba guardado con 65 y StarUML lo dibujaba más alto. Lo cubren
+  `test_entidades_que_muestran_operaciones_se_miden_con_ellas`,
+  `test_pantallas_y_control_que_muestran_operaciones_se_miden_con_ellas` y, con StarUML,
+  `test_staruml_dibuja_limpia_una_entidad_con_cinco_lineas_por_abajo_que_muestra_operaciones`.
 
 ## 4. Convenciones y Reglas Inquebrantables
 

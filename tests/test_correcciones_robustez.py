@@ -393,11 +393,30 @@ def test_modelo_real_regenerado_con_lo_que_tiene_el_modelo_se_ve_limpio_en_staru
 HIJAS = ['LineaPedido', 'Pago', 'Envio', 'Factura', 'Devolucion']
 
 
-def _alto_staruml(el, operaciones):
-    """Alto con que StarUML dibuja una entidad en notacion de iconos: icono 40, nombre 25 y cada compartimento que
-    muestra con 5 arriba, 13 por renglon y 2 entre renglones, y 5 abajo (vacio mide 10)."""
+def _alto_staruml(el, atributos=True, operaciones=True):
+    """Alto con que StarUML dibuja una clase de robustez en notacion de iconos: icono 40, nombre 25 y cada
+    compartimento que muestra con 5 arriba, 13 por renglon y 2 entre renglones, y 5 abajo (vacio mide 10)."""
     comp = lambda n: 15 * n + 8 if n else 10
-    return 40 + 25 + comp(len(el.get('attributes', []))) + (comp(len(el.get('operations', []))) if operaciones else 0)
+    return 40 + 25 + (comp(len(el.get('attributes', []))) if atributos else 0) + \
+        (comp(len(el.get('operations', []))) if operaciones else 0)
+
+
+def _mostrar_operaciones(doc, v, el):
+    """La vista muestra las operaciones de su clase, como queda si se le activan en StarUML."""
+    v['suppressOperations'] = False
+    opc = next(s for s in v['subViews'] if s['_type'] == 'UMLOperationCompartmentView')
+    opc.pop('visible', None)
+    opc['subViews'] = [{'_type': 'UMLOperationView', '_id': doc.new_id(), '_parent': M.ref(opc['_id']),
+                        'model': M.ref(o['_id']), 'font': 'Arial;13;0', 'parentStyle': True,
+                        'left': v['left'] + 5, 'top': v['top'] + v['height'] + 5 + 15 * i, 'width': v['width'] - 9,
+                        'height': 13, 'text': f'+{o["name"]}()', 'horizontalAlignment': 0}
+                       for i, o in enumerate(el.get('operations', []))]
+    v['height'] = _alto_staruml(el, atributos=not v.get('suppressAttributes'))
+
+
+def _operaciones(doc, el, nombres):
+    el['operations'] = [{'_type': 'UMLOperation', '_id': doc.new_id(), '_parent': M.ref(el['_id']), 'name': n}
+                        for n in nombres]
 
 
 def _pedido_con_cinco(vacio):
@@ -417,23 +436,12 @@ def _pedido_con_cinco(vacio):
     ok(tool('mdj_robustez_generar', archivo=vacio, diagrama=_diagrama(vacio, 'Analisis'), paquete='Analisis', **caso))
     doc = M.Doc(vacio)
     for e in entidades:
-        el = doc.find(e['nombre'], types=('UMLClass',))
         ops = ('guardar', 'consultar', 'actualizar', 'cancelar') if e['nombre'] == 'Pedido' else ('guardar',)
-        el['operations'] = [{'_type': 'UMLOperation', '_id': doc.new_id(), '_parent': M.ref(el['_id']),
-                             'name': op + e['nombre']} for op in ops]
+        _operaciones(doc, doc.find(e['nombre'], types=('UMLClass',)), [op + e['nombre'] for op in ops])
     for v in doc.diagram('Analisis')['ownedViews']:
         el = doc.ids.get((v.get('model') or {}).get('$ref'))
-        if v['_type'] != 'UMLClassView' or doc.kind(el) != 'entity':
-            continue
-        v['suppressOperations'] = False
-        opc = next(s for s in v['subViews'] if s['_type'] == 'UMLOperationCompartmentView')
-        opc.pop('visible', None)
-        opc['subViews'] = [{'_type': 'UMLOperationView', '_id': doc.new_id(), '_parent': M.ref(opc['_id']),
-                            'model': M.ref(o['_id']), 'font': 'Arial;13;0', 'parentStyle': True,
-                            'left': v['left'] + 5, 'top': v['top'] + v['height'] + 5 + 15 * i,
-                            'width': v['width'] - 9, 'height': 13, 'text': f'+{o["name"]}()',
-                            'horizontalAlignment': 0} for i, o in enumerate(el['operations'])]
-        v['height'] = _alto_staruml(el, True)
+        if v['_type'] == 'UMLClassView' and doc.kind(el) == 'entity':
+            _mostrar_operaciones(doc, v, el)
     doc.reindex()
     doc.save(backup=False)
     return _minimo(caso)
@@ -452,7 +460,7 @@ def test_entidades_que_muestran_operaciones_se_miden_con_ellas(vacio):
     cajas = {doc.name_of(v['model']['$ref']): v for v in dg['ownedViews'] if v['_type'] == 'UMLClassView'}
     for n in ['Cliente', 'Pedido'] + HIJAS:
         el, v = doc.find(n, types=('UMLClass',)), cajas[n]
-        assert v['height'] == _alto_staruml(el, True), n
+        assert v['height'] == _alto_staruml(el), n
         opc = next(s for s in v['subViews'] if s['_type'] == 'UMLOperationCompartmentView')
         assert [s['model']['$ref'] for s in opc['subViews']] == [o['_id'] for o in el['operations']], n
     # las cinco salen del borde de abajo de Pedido y su '1' queda entre la caja y el tramo que dobla
@@ -471,6 +479,72 @@ def test_entidades_que_muestran_operaciones_se_miden_con_ellas(vacio):
 def test_staruml_dibuja_limpia_una_entidad_con_cinco_lineas_por_abajo_que_muestra_operaciones(vacio, tmp_path,
                                                                                                staruml):
     caso = _pedido_con_cinco(vacio)
+    dg = _diagrama(vacio, 'Analisis 2')
+    ok(tool('mdj_robustez_generar', archivo=vacio, diagrama=dg, paquete='Analisis', **caso))
+    svg = ok(tool('staruml_exportar', archivo=vacio, carpeta=str(tmp_path / 'svg'), diagrama=dg))['archivos'][0]
+    rev = ok(tool('svg_revisar', svg=svg, archivo=vacio, diagrama=dg))
+    assert rev['n_problemas'] == 0, rev['problemas']
+
+
+def _segundo_caso_de_uso(vacio):
+    """El analisis de un primer caso de uso en 'Analisis' cuyo control y pantallas muestran sus operaciones (las
+    pantallas no tienen: queda el compartimento vacio) y el control del segundo con las suyas. Devuelve el caso del
+    segundo: sus vistas copian ese estilo."""
+    ok(tool('mdj_robustez_generar', archivo=vacio, diagrama=_diagrama(vacio, 'Analisis'), paquete='Analisis',
+            actores=[{'nombre': 'Vendedor'}], pantallas=[{'nombre': 'PantallaPedido'}, {'nombre': 'PantallaPago'}],
+            control={'nombre': 'ControlPedido'}, entidades=[{'nombre': 'Pedido', 'atributos': ['folio', 'total']}]))
+    doc = M.Doc(vacio)
+    pk = doc.find('Analisis', types=('UMLPackage',))
+    envio = {'_type': 'UMLClass', '_id': doc.new_id(), '_parent': M.ref(pk['_id']), 'name': 'ControlEnvio',
+             'stereotype': M.ref(doc.stereotype_id('control'))}
+    pk['ownedElements'].append(envio)
+    _operaciones(doc, doc.find('ControlPedido', types=('UMLClass',)), ['registrarPedido', 'calcularTotal'])
+    _operaciones(doc, envio, ['buscarPedido', 'validarDireccion', 'calcularCosto', 'programarEnvio',
+                              'registrarEnvio', 'consultarRastreo', 'confirmarEntrega', 'enviarAviso'])
+    doc.reindex()
+    for v in doc.diagram('Analisis')['ownedViews']:
+        el = doc.ids.get((v.get('model') or {}).get('$ref'))
+        if v['_type'] == 'UMLClassView' and doc.kind(el) in ('boundary', 'control'):
+            _mostrar_operaciones(doc, v, el)
+    doc.save(backup=False)
+    return dict(actores=[{'nombre': 'Repartidor'}],
+                pantallas=[{'nombre': 'PantallaEnvio', 'nota': 'F1: captura la direccion y el horario de entrega.'},
+                           {'nombre': 'PantallaRastreo', 'nota': 'F2: muestra donde va el envio.'},
+                           {'nombre': 'PantallaEntrega'}],
+                control={'nombre': 'ControlEnvio'},
+                entidades=[{'nombre': 'Envio', 'atributos': ['guia', 'direccion', 'horario']},
+                           {'nombre': 'Rastreo', 'atributos': ['fecha', 'lugar']}],
+                asociaciones=[{'desde': 'Envio', 'hasta': 'Rastreo', 'mult_desde': '1', 'mult_hacia': '0..*'}])
+
+
+def test_pantallas_y_control_que_muestran_operaciones_se_miden_con_ellas(vacio):
+    # el control del segundo caso de uso copia el estilo del primero, que muestra sus operaciones: su caja mide lo que
+    # StarUML dibuja con las suyas y queda a la altura media de las pantallas; las pantallas, con su compartimento
+    # vacio, miden 75 y su nota empieza debajo. Antes median 65 fijo y StarUML agrandaba las cajas
+    caso = _segundo_caso_de_uso(vacio)
+    r = ok(tool('mdj_robustez_generar', archivo=vacio, diagrama=_diagrama(vacio, 'Analisis 2'), paquete='Analisis',
+                **caso))
+    assert r['lineas_que_cruzan_cajas'] == [] and r['etiquetas_que_chocan'] == []
+    doc = M.Doc(vacio)
+    dg = doc.diagram('Analisis 2')
+    cajas = {doc.name_of(v['model']['$ref']): v for v in dg['ownedViews'] if v['_type'] == 'UMLClassView'}
+    control = doc.find('ControlEnvio', types=('UMLClass',))
+    v = cajas['ControlEnvio']
+    assert v['height'] == _alto_staruml(control, atributos=False) == 65 + 15 * 8 + 8
+    opc = next(s for s in v['subViews'] if s['_type'] == 'UMLOperationCompartmentView')
+    assert [s['model']['$ref'] for s in opc['subViews']] == [o['_id'] for o in control['operations']]
+    pantallas = [cajas[p['nombre']] for p in caso['pantallas']]
+    assert [p['height'] for p in pantallas] == [75] * 3
+    medio = sum(p['top'] + p['height'] / 2 for p in pantallas) / 3
+    assert abs(v['top'] + v['height'] / 2 - medio) <= 1
+    notas = sorted((n for n in dg['ownedViews'] if n['_type'] == 'UMLNoteView'), key=lambda n: n['top'])
+    for p, n in zip(pantallas, notas):
+        assert n['top'] >= p['top'] + p['height'] + 10
+    assert ids_integros(vacio)
+
+
+def test_staruml_dibuja_limpias_pantallas_y_control_que_muestran_operaciones(vacio, tmp_path, staruml):
+    caso = _segundo_caso_de_uso(vacio)
     dg = _diagrama(vacio, 'Analisis 2')
     ok(tool('mdj_robustez_generar', archivo=vacio, diagrama=dg, paquete='Analisis', **caso))
     svg = ok(tool('staruml_exportar', archivo=vacio, carpeta=str(tmp_path / 'svg'), diagrama=dg))['archivos'][0]
