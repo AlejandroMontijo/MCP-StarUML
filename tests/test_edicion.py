@@ -2,13 +2,36 @@
 import os
 
 
-from apoyo import LIFELINES, MENSAJES, M, ids_integros, ok, tool
+from apoyo import LIFELINES, MENSAJES, M, estereotipos_de_robustez_como_texto, ids_integros, ok, tool
 
 
 def test_modelo_de_ejemplo_cumple_oose(modelo):
     v = ok(tool('mdj_validar', archivo=modelo))
     assert v['n_duplicados'] == v['n_colgantes'] == v['n_parent_mismatch'] == 0
     assert v['oose'] == {'problemas': [], 'avisos': []}
+
+
+def test_estereotipo_como_texto_solo_se_marca_en_clases_de_robustez(modelo):
+    """Una clase de diseno puede guardar su estereotipo como texto («Form», en un paquete con un control que si va
+    como referencia al perfil); una de robustez no. mdj_validar y la prueba del modelo real usan el mismo criterio."""
+    doc = M.Doc(modelo)
+    raiz = doc.find('UMLModel:Model')
+    pk = {'_type': 'UMLPackage', '_id': doc.new_id(), '_parent': M.ref(raiz['_id']), 'name': 'Presentacion'}
+    control = M.ref(doc.stereotype_id('control'))
+    pk['ownedElements'] = [{'_type': 'UMLClass', '_id': doc.new_id(), '_parent': M.ref(pk['_id']), 'name': n,
+                            'stereotype': st} for n, st in (('RegistroForm', 'Form'), ('Coordinador', control))]
+    raiz['ownedElements'].append(pk)
+    doc.save(backup=False)
+    doc = M.Doc(modelo)
+    assert doc.find('RegistroForm')['stereotype'] == 'Form'
+    assert estereotipos_de_robustez_como_texto(doc) == []
+    assert ok(tool('mdj_validar', archivo=modelo))['oose']['problemas'] == []
+    doc.find('Cuenta')['stereotype'] = 'entity'
+    doc.save(backup=False)
+    assert estereotipos_de_robustez_como_texto(M.Doc(modelo)) == ['Cuenta']
+    assert ok(tool('mdj_validar', archivo=modelo))['oose']['problemas'] == [
+        'Cuenta: el estereotipo entity esta como texto; debe ser referencia al perfil']
+    assert ids_integros(modelo)
 
 
 # --- diagramas sin vistas (asi guarda StarUML un diagrama recien creado) ---

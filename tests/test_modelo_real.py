@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from apoyo import M, compilar_csharp, ids_integros, ok, tool
+from apoyo import M, compilar_csharp, estereotipos_de_robustez_como_texto, ids_integros, ok, tool
 
 
 def diagramas(path, tipo):
@@ -41,15 +41,16 @@ def test_integro_y_sin_problemas_oose(real):
 
 
 def test_reglas_de_robustez_del_caso_de_uso(real):
-    """Un solo control por paquete de caso de uso, estereotipos como referencia al perfil, y en las secuencias:
-    nada de control->actor ni replies de boundary a actor; a los actores solo les hablan las boundaries."""
+    """Un solo control por paquete de caso de uso, estereotipos de robustez como referencia al perfil (las clases de
+    diseno pueden llevar el suyo como texto) y en las secuencias: nada de control->actor ni replies de boundary a
+    actor; a los actores solo les hablan las boundaries."""
     doc = M.Doc(real)
+    texto = estereotipos_de_robustez_como_texto(doc)
+    assert not texto, f'estereotipo como texto: {texto}'
     controles = {}
     for o in doc.ids.values():
-        if o and o['_type'] == 'UMLClass':
-            assert not isinstance(o.get('stereotype'), str), f'{o.get("name")}: estereotipo como texto'
-            if doc.kind(o) == 'control':
-                controles.setdefault(doc.parent.get(o['_id']), []).append(o['name'])
+        if o and o['_type'] == 'UMLClass' and doc.kind(o) == 'control':
+            controles.setdefault(doc.parent.get(o['_id']), []).append(o['name'])
     assert controles and all(len(v) == 1 for v in controles.values()), controles
     for dg in diagramas(real, 'UMLSequenceDiagram'):
         for m in M.secuencia(doc, dg['_id'])['mensajes']:

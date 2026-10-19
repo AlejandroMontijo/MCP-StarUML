@@ -291,6 +291,15 @@ def ids_integros(path):
     return v['n_duplicados'] == 0 and v['n_colgantes'] == 0 and v['n_parent_mismatch'] == 0
 
 
+def estereotipos_de_robustez_como_texto(doc):
+    """Clases de robustez (boundary, control, entity) con el estereotipo guardado como texto y no como referencia al
+    perfil; StarUML no las dibuja con su icono. Es el criterio de mdj_validar: las clases de diseno si pueden llevar
+    su estereotipo como texto (p. ej. «Form»)."""
+    return [o.get('name') for o in doc.ids.values()
+            if o and o['_type'] == 'UMLClass' and isinstance(o.get('stereotype'), str)
+            and o['stereotype'] in ('boundary', 'control', 'entity')]
+
+
 def _vistas_de(dg):
     res = []
 
