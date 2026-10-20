@@ -355,6 +355,33 @@ def poblar_paleta(doc, dg):
     return hechos, fallas
 
 
+def en_el_aire(doc, dg):
+    """Lineas que terminan en el aire junto a un icono (actor, artefacto...): su caja es tan ancha como su nombre y el
+    dibujo es mas angosto, asi que una linea que le llega por un costado, o por arriba fuera del dibujo, no lo toca. Se
+    calcula con los extremos que dibuja StarUML. Por abajo la linea cuelga del nombre, y a la bola de una interfaz
+    StarUML le pega sus realizaciones y dependencias."""
+    from staruml_mcp import uml as U
+    res = []
+    for v in dg.get('ownedViews', []):
+        if not isinstance(v.get('points'), str):
+            continue
+        pts = U._puntos_staruml(doc, v)
+        for k, p in (('tail', pts[0]), ('head', pts[-1])):
+            x = doc.ids.get((v.get(k) or {}).get('$ref'))
+            dibujo = U._dibujo_icono(x)
+            if dibujo is None:
+                continue
+            r = U._rect(x)
+            a_la_bola = k == 'head' and x['_type'] == 'UMLInterfaceView' and \
+                v['_type'] in ('UMLInterfaceRealizationView', 'UMLDependencyView')
+            if (abs(p[0] - r[0]) <= 1 or abs(p[0] - r[2]) <= 1) and r[1] + 1 < p[1] < r[3] - 1:
+                res.append(f'{dg.get("name")}: {v["_type"]} llega por un costado a {doc.name_of(x["model"]["$ref"])}')
+            elif abs(p[1] - r[1]) <= 1 and not dibujo[0] - 1 <= p[0] <= dibujo[2] + 1 and not a_la_bola:
+                res.append(f'{dg.get("name")}: {v["_type"]} llega por arriba a {doc.name_of(x["model"]["$ref"])}, '
+                           f'fuera de su dibujo')
+    return res
+
+
 def modelo_real():
     """El .mdj real del caso de uso (no se versiona): STARUML_MCP_MODELO_REAL o el primer pruebas/*.mdj."""
     p = os.environ.get('STARUML_MCP_MODELO_REAL')

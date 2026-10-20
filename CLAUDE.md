@@ -187,6 +187,24 @@ herramienta, para que quien la use obtenga el diagrama correcto a la primera:
     - `etiquetas_extremos` pone cada etiqueta en el primer lugar libre junto a su caja.
     - En la tienda de las pruebas no queda nada encimado.
     - En 30 programas al azar de 10 a 30 clases (2270 etiquetas) quedan 79 choques de etiqueta con línea (antes 2350).
+- Resuelto el 2026-10-19, rutas de `mdj_diagrama_generar`:
+  - Desde el cambio anterior, `programa.rutas` da cada ruta por `(a, b, j)` y el generador la buscaba por `(a, b)`: sus
+    líneas salían rectas. `_sin_cruces` rehacía casi todas, pero no las que crean una caja (objeto de enlace): en
+    `G05 Componentes` el enlace de config a api-v2.jar pasaba sobre perfil y la galería con StarUML fallaba.
+  - Con las rutas de vuelta, los puertos de arriba de un ícono (actor, artefacto, bola de una interfaz) se repartían en
+    toda su caja, que es tan ancha como el nombre, y la línea quedaba en el aire. `rutas` acepta `bandas` y el
+    generador manda el dibujo del ícono (`uml._dibujo_icono`, como `computeIconRect` de StarUML) solo para el lado de
+    arriba: por abajo la línea cuelga del nombre.
+  - Lo mismo en las líneas que no van por esas rutas (de algo anidado hacia afuera): `_sin_cruces` rehace la que llega
+    por arriba fuera del dibujo y `_ruta_libre` no la propone. Pasaba ya antes: en el diagrama Renta de
+    `test_staruml_dibuja_casos_de_uso_con_sistema`, la línea de Confirmar renta (dentro del sujeto) a Servicio de
+    Correo llegaba en diagonal a un lado de la cabeza. A la bola de una interfaz no se le aplica: StarUML le pega sus
+    realizaciones y dependencias.
+  - Lo cubren sin StarUML `test_componentes_sin_lineas_sobre_cajas` y
+    `test_ninguna_linea_queda_en_el_aire_junto_a_un_icono` (galería),
+    `test_lineas_que_llegan_por_arriba_a_un_icono_van_sobre_su_dibujo` (rutas) y
+    `test_generar_linea_de_un_caso_de_uso_a_un_actor_llega_a_su_dibujo`. `en_el_aire` (apoyo.py) revisa también lo que
+    llega por arriba fuera del dibujo.
 
 ## 3f. Métodos de persistencia en las entity (2026-10-18)
 

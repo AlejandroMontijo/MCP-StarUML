@@ -1189,7 +1189,7 @@ def _repartir(x0, x1, espacios):
     return xs
 
 
-def rutas(cajas, geometrias, espacios=None, copias=None):
+def rutas(cajas, geometrias, espacios=None, copias=None, bandas=None):
     """Puntos intermedios de cada relacion, por (arriba, abajo, j) o (izquierda, derecha, j) si estan en la misma fila;
     j numera las lineas que unen el mismo par (copias: {frozenset(par): cuantas}, una si no se dice).
     Cada linea sale de un puerto propio del borde, corre por su carril en el canal libre entre filas (si sus puertos
@@ -1197,8 +1197,10 @@ def rutas(cajas, geometrias, espacios=None, copias=None):
     entra por otro puerto propio. Entre cajas de la misma fila sube al canal de arriba (en la primera
     fila baja al de abajo), corre y vuelve. En cada canal los carriles se ordenan (_orden_canal) para que las lineas no
     se crucen cuando se puede. espacios: {(caja, clave): (izq, der)} ancho de las etiquetas de ese extremo a cada lado
-    de la linea, que se deja libre junto a su puerto."""
-    salida, espacios, copias = {}, espacios or {}, copias or {}
+    de la linea, que se deja libre junto a su puerto. bandas: {(caja, lado): (x0, x1)} tramo del borde de arriba o de
+    abajo donde van los puertos de ese lado (el dibujo de un icono, mas angosto que su caja), ensanchado parejo si sus
+    puertos no caben con su separacion minima; sin banda, todo el borde."""
+    salida, espacios, copias, bandas = {}, espacios or {}, copias or {}, bandas or {}
     centro_x = lambda n: (cajas[n][0] + cajas[n][2]) / 2
     for geo in geometrias:
         tops, altos, capa, canales = geo['tops'], geo['altos'], geo['capa'], geo['canales']
@@ -1225,15 +1227,20 @@ def rutas(cajas, geometrias, espacios=None, copias=None):
             x0, _, x1, _ = cajas[n]
             lista.sort(key=lambda t: t[1])
             esp = [espacios.get((n, c), (0, 0)) for c, _ in lista]
+            seps = _seps(esp)
+            if (n, lado) in bandas:
+                b0, b1 = bandas[(n, lado)]
+                falta = max(0, sum(seps) - (b1 - b0)) / 2
+                x0, x1 = max(x0, b0 - falta), min(x1, b1 + falta)
             for (clave, _), x in zip(lista, _repartir(x0, x1, esp)):
                 px[(n, lado, clave)] = x
-            orden[(n, lado)] = ([c for c, _ in lista], _seps(esp))
+            orden[(n, lado)] = ([c for c, _ in lista], seps, x0, x1)
 
         def cabe(n, lado, clave, x):
-            claves, seps = orden[(n, lado)]
+            claves, seps, x0, x1 = orden[(n, lado)]
             i = claves.index(clave)
-            izq = px[(n, lado, claves[i - 1])] if i else cajas[n][0]
-            der = px[(n, lado, claves[i + 1])] if i + 1 < len(claves) else cajas[n][2]
+            izq = px[(n, lado, claves[i - 1])] if i else x0
+            der = px[(n, lado, claves[i + 1])] if i + 1 < len(claves) else x1
             return izq + seps[i] - 0.5 <= x <= der - seps[i + 1] + 0.5
         # una linea entre filas vecinas baja recta si sus dos puertos se pueden alinear sin quitar lugar a las demas; una
         # que salta filas sale y llega alineada con el hueco por el que cruza, si cabe

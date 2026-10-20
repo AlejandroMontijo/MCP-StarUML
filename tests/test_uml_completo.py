@@ -3,7 +3,7 @@
 
 import pytest
 
-from apoyo import M, ok, tool, poblar_paleta, ids_integros
+from apoyo import M, en_el_aire, ok, tool, poblar_paleta, ids_integros
 from staruml_mcp import uml as U
 
 TIPOS_DIAGRAMA = sorted(U.plantillas()['diagramas'])
@@ -228,6 +228,23 @@ def test_generar_estados_con_estado_compuesto(vacio):
     assert len(r['transiciones']) == 4
     assert _cajas_encimadas(doc, doc.diagram('Pedido')) == []
     assert ok(tool('mdj_validar', archivo=vacio, oose=False))['metamodelo'] == []
+
+
+def test_generar_linea_de_un_caso_de_uso_a_un_actor_llega_a_su_dibujo(vacio):
+    """Confirmar renta esta dentro del sujeto y Servicio de Correo afuera, abajo: esa linea no va por las rutas de las
+    filas sino por la ruta libre. La caja del actor es tan ancha como su nombre y la linea llegaba en diagonal a su
+    borde de arriba, a un lado de la cabeza; ahora baja a la cabeza."""
+    casos = ('Confirmar renta', 'Cotizar renta', 'Registrar solicitud')
+    dg = ok(tool('mdj_diagrama_crear', archivo=vacio, tipo='casos_de_uso', nombre='Renta'))['diagrama']
+    ok(tool('mdj_diagrama_generar', archivo=vacio, diagrama=dg, elementos=[
+        {'simbolo': 'Actor', 'nombre': 'Asesor de Renta'},
+        {'simbolo': 'Use Case Subject', 'nombre': 'Sistema de renta'}]
+        + [{'simbolo': 'Use Case', 'nombre': n, 'dentro': 'Sistema de renta'} for n in casos]
+        + [{'simbolo': 'Actor', 'nombre': 'Servicio de Correo'}],
+        relaciones=[{'simbolo': 'Association', 'desde': 'Asesor de Renta', 'hasta': n} for n in casos]
+        + [{'simbolo': 'Association', 'desde': 'Confirmar renta', 'hasta': 'Servicio de Correo'}]))
+    doc = M.Doc(vacio)
+    assert en_el_aire(doc, doc.diagram('Renta')) == []
 
 
 def test_generar_errores(vacio):

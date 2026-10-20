@@ -608,6 +608,38 @@ def _figura(v):
     return dict(v) if abajo else None
 
 
+# ancho entre alto (en %) del icono de cada vista en StarUML (iconRatio); las demas lo dibujan cuadrado
+_PROPORCION_ICONO = {'UMLActorView': 26 / 55 * 100, 'UMLArtifactView': 40 / 50 * 100,
+                     'UMLArtifactInstanceView': 40 / 50 * 100, 'UMLComponentView': 50 / 45 * 100,
+                     'UMLComponentInstanceView': 50 / 45 * 100, 'UMLUseCaseView': 70 / 32 * 100,
+                     'UMLCollaborationView': 70 / 32 * 100}
+
+
+def _dibujo_icono(v):
+    """Rectangulo (x0, y0, x1, y1) del icono de una vista que se dibuja como icono (actor, artefacto, bola de una
+    interfaz...): StarUML lo pone en el alto que deja el nombre, con la proporcion de su tipo y centrado a lo ancho
+    (computeIconRect). La caja es tan ancha como el nombre: una linea que toca la caja fuera de este rectangulo queda
+    en el aire. None si la vista no es un icono."""
+    if not _es_caja(v) or not (v.get('stereotypeDisplay') in ('icon', 'icon-label')
+                               or v.get('_type') == 'UMLActorView'):
+        return None
+    nc = next((x for x in v.get('subViews', []) if x.get('_type') == 'UMLNameCompartmentView'), None)
+    alto = max(8, v['height'] - (nc['height'] if nc and isinstance(nc.get('height'), (int, float)) else 25))
+    proporcion = _PROPORCION_ICONO.get(v['_type'], 100)
+    w, h, y = alto * proporcion / 100, alto, v['top']
+    if w > v['width']:  # mas angosta que el icono: manda el ancho y el icono queda centrado a lo alto
+        w, h = v['width'], v['width'] * 100 / proporcion
+        y += (alto - h) / 2
+    cx = v['left'] + v['width'] / 2
+    return (cx - w / 2, y, cx + w / 2, y + h)
+
+
+def _arriba_fuera(p, r, icono):
+    """El extremo p de una linea llega por arriba a la caja r pero fuera de icono (el dibujo de _dibujo_icono, o None
+    si la caja no es un icono): como la caja es tan ancha como el nombre, la linea queda en el aire."""
+    return icono is not None and abs(p[1] - r[1]) <= 1 and not icono[0] - 1 <= p[0] <= icono[2] + 1
+
+
 def _zona_nombre(v):
     """Rectangulo (x0, y0, x1, y1) del nombre que StarUML pone debajo de una figura (evento, compuerta, objeto de
     datos...), con el ancho del texto que lleva; None si el nombre no va abajo."""
@@ -1663,11 +1695,12 @@ def _encima(segs, otros):
     return n
 
 
-def _ruta_libre(t, h, obstaculos, otras_lineas=(), iconos=(False, False)):
+def _ruta_libre(t, h, obstaculos, otras_lineas=(), iconos=(False, False), dibujos=(None, None)):
     """La mejor ruta de una linea entre los rectangulos t y h que no cruce los obstaculos: recta, en L, en Z por un
     canal vertical u horizontal libre junto a lo que estorba, o saliendo por arriba o abajo y luego por un canal. Un
-    extremo que es icono (actor: la caja es mas ancha que el dibujo) solo se toca por arriba o por abajo: por un
-    costado la linea quedaria en el aire. Devuelve (cruces, puntos)."""
+    extremo que es icono (actor: la caja es mas ancha que el dibujo) solo se toca por arriba o por abajo, y por arriba
+    sobre su dibujo (dibujos: el de cada extremo que lo pide): si no, la linea quedaria en el aire. Devuelve (cruces,
+    puntos)."""
     from . import programa as P
     ct, ch = _centro_r(t), _centro_r(h)
 
@@ -1706,6 +1739,8 @@ def _ruta_libre(t, h, obstaculos, otras_lineas=(), iconos=(False, False)):
                 [_junction_r(h, medios[-1] if medios else ct)]
             if (iconos[0] and de_costado(pts[0], t)) or (iconos[1] and de_costado(pts[-1], h)):
                 continue
+            if _arriba_fuera(pts[0], t, dibujos[0]) or _arriba_fuera(pts[-1], h, dibujos[1]):
+                continue
             pts = [(round(x), round(y)) for x, y in pts]
             tramos = list(zip(pts, pts[1:]))
             # a menos de 8 px de una caja la linea ya parece montada en su borde
@@ -1740,18 +1775,25 @@ def _nombre_arriba(doc, v):
 
 def _sin_cruces(doc, v, va, vb, otras):
     """Si la linea v cruza alguna de las cajas otras (o un nombre: el de un contenedor o el que va debajo de un
-    extremo), o le llega por un costado a un icono, la cambia por la ruta libre mas corta que haya."""
+    extremo), o le llega a un icono por un costado o por arriba fuera de su dibujo, la cambia por la ruta libre mas
+    corta que haya."""
     from . import programa as P
     if va is vb or not _es_caja(va) or not _es_caja(vb):
         return
     obst = [z for z in (_zona_nombre(va), _zona_nombre(vb)) if z] + list(otras)
     actual = [tuple(p) for p in P._puntos(v)]
-    # un icono (actor, artefacto...) es mas angosto que su caja: si la linea le llega por un costado, queda en el aire
+    # un icono (actor, artefacto...) es mas angosto que su caja: si la linea le llega por un costado, o por arriba
+    # fuera de su dibujo, queda en el aire. A la bola de una interfaz StarUML le pega sus realizaciones y dependencias
     iconos = tuple(x.get('stereotypeDisplay') == 'icon' or x.get('_type') == 'UMLActorView' for x in (va, vb))
+    bola = vb.get('_type') == 'UMLInterfaceView' and v.get('_type') in ('UMLInterfaceRealizationView',
+                                                                         'UMLDependencyView')
+    dibujos = (_dibujo_icono(va), None if bola else _dibujo_icono(vb))
     dibujo = _puntos_staruml(doc, v)
     de_costado = any(ic and (abs(p[0] - r[0]) <= 1 or abs(p[0] - r[2]) <= 1) and r[1] + 1 < p[1] < r[3] - 1
                      for ic, p, r in ((iconos[0], dibujo[0], _rect(va)), (iconos[1], dibujo[-1], _rect(vb))))
-    if not de_costado and not sum(1 for p, q in zip(actual, actual[1:]) for o in obst if P._cruza(p, q, o, 0)):
+    en_el_aire = de_costado or _arriba_fuera(dibujo[0], _rect(va), dibujos[0]) or \
+        _arriba_fuera(dibujo[-1], _rect(vb), dibujos[1])
+    if not en_el_aire and not sum(1 for p, q in zip(actual, actual[1:]) for o in obst if P._cruza(p, q, o, 0)):
         return
     dg = doc.ids.get((v.get('_parent') or {}).get('$ref')) or {}
     lineas = [x for x in dg.get('ownedViews', []) if x is not v and isinstance(x.get('points'), str)]
@@ -1762,7 +1804,7 @@ def _sin_cruces(doc, v, va, vb, otras):
             r = _rect(x)
             otras_l += [((r[0], r[1]), (r[2], r[1])), ((r[2], r[1]), (r[2], r[3])), ((r[0], r[3]), (r[2], r[3])),
                         ((r[0], r[1]), (r[0], r[3]))]
-    cruces, pts = _ruta_libre(_rect(va), _rect(vb), obst, otras_l, iconos)
+    cruces, pts = _ruta_libre(_rect(va), _rect(vb), obst, otras_l, iconos, dibujos)
     if cruces == 0:
         v['points'] = ';'.join(f'{x}:{y}' for x, y in pts)
 
@@ -2256,7 +2298,14 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
     if disposicion == 'capas':
         _lado_de_borde(doc, els, rels, vistas, padre_de, existente)
     cajas = {k: P._caja(vistas[k]) for k in miembros}
-    medios_de = P.rutas(cajas, geometrias) if geometrias else {}
+    # las lineas que llegan por arriba a un icono (actor, artefacto...) van sobre su dibujo: su caja es tan ancha como
+    # su nombre y fuera del dibujo la linea quedaria en el aire (por abajo cuelgan del nombre)
+    bandas = {}
+    for k in miembros:
+        ic = _dibujo_icono(vistas[k])
+        if ic:
+            bandas[(k, 'arriba')] = (ic[0], ic[2])
+    medios_de = P.rutas(cajas, geometrias, bandas=bandas) if geometrias else {}
     sentido = {frozenset(par): par for geo in geometrias for par in list(geo['cadenas']) + geo['mismas']}
     # avisos y y_msj ya vienen de arriba (y_msj empieza debajo de los mensajes que ya tenia el diagrama)
     lineas, cruzan = [], []
@@ -2273,7 +2322,8 @@ def generar_diagrama(doc, diagrama, elementos, relaciones=(), disposicion='capas
         if disposicion == 'capas' and a and b and a['_k'] in miembros and b['_k'] in miembros and a is not b:
             par = frozenset((a['_k'], b['_k']))
             if par in sentido:
-                medios = list(medios_de.get(sentido[par], []))
+                # rutas numera las lineas de cada par (a, b, j); aqui cada par lleva una sola ruta
+                medios = list(medios_de.get(sentido[par] + (0,), []))
                 if sentido[par] != (a['_k'], b['_k']):
                     medios = medios[::-1]
         r = dib(rel['_clave'], rel.get('nombre'), desde=va and va['_id'], hasta=vb and vb['_id'], medios=medios)

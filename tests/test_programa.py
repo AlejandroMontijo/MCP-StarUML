@@ -313,6 +313,22 @@ def test_dos_lineas_entre_cajas_de_la_misma_fila_no_se_cruzan(izquierda):
     assert cruces_entre_lineas({'ownedViews': [{'points': ';'.join(f'{x}:{y}' for x, y in pts)} for pts in lineas]}) == 0
 
 
+def test_lineas_que_llegan_por_arriba_a_un_icono_van_sobre_su_dibujo():
+    # b es un icono de 40 px (290 a 330) en una caja de 120, tan ancha como su nombre: sin banda, la linea de a baja
+    # recta a 40 px del centro de b y queda en el aire; con la banda llega al dibujo
+    cajas = {'a': (330, 0, 450, 60), 'b': (250, 220, 370, 295)}
+    geo = {'tops': [0, 220], 'altos': [60, 75], 'canales': [160, 120], 'capa': {'a': 0, 'b': 1},
+           'cadenas': {('a', 'b'): ['a', 'b']}, 'mismas': [], 'huecos': {}}
+    assert P.rutas(cajas, [geo])[('a', 'b', 0)][-1][0] == 350
+    assert 290 <= P.rutas(cajas, [geo], bandas={('b', 'arriba'): (290, 330)})[('a', 'b', 0)][-1][0] <= 330
+    # dos lineas a un actor (26 px): la banda se ensancha lo justo para dejar entre ellas la separacion minima
+    cajas['c'] = (100, 0, 220, 60)
+    geo['capa']['c'] = 0
+    geo['cadenas'][('c', 'b')] = ['c', 'b']
+    sal = P.rutas(cajas, [geo], bandas={('b', 'arriba'): (297, 323)})
+    assert sorted(sal[(n, 'b', 0)][-1][0] for n in 'ac') == [300, 320]
+
+
 def test_orden_de_las_filas_con_menos_cruces():
     # a y b arriba, c y d abajo, a-d y b-c se cruzan: intercambiar dos vecinas lo quita
     filas = [['a', 'b'], ['c', 'd']]

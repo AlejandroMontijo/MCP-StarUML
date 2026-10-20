@@ -1,12 +1,15 @@
 # La galeria (tests/galeria.py): un diagrama de cada tipo de StarUML con todos los simbolos de su paleta. Aqui se
 # comprueba sin StarUML que cubre todo, que se construye con las herramientas MCP sin errores de integridad ni de
-# metamodelo, y la deteccion de lineas que atraviesan un contenedor. tests/test_staruml_real.py la exporta con el
-# StarUML verdadero y revisa cada SVG.
+# metamodelo, la deteccion de lineas que atraviesan un contenedor y, con los puntos que dibuja StarUML, que las lineas
+# no pasen sobre cajas ni terminen en el aire junto a un icono. tests/test_staruml_real.py la exporta con el StarUML
+# verdadero y revisa cada SVG.
 import pytest
 
 import galeria as G
+from staruml_mcp import programa as P
+from staruml_mcp import render as R
 from staruml_mcp import uml as U
-from apoyo import M, ok, tool, ids_integros
+from apoyo import M, en_el_aire, ok, tool, ids_integros
 
 
 def herramienta(_h, /, **a):
@@ -66,6 +69,50 @@ def test_carriles_contiguos_y_del_mismo_largo(galeria):
     # lo de cada carril queda dentro de el, tambien en el modelo
     accion = next(o for o in doc.ids.values() if o and o.get('name') == 'Elegir productos')
     assert doc.ids[doc.parent[accion['_id']]].get('name') == 'Cliente'
+
+
+def lineas_sobre_cajas(doc, dg):
+    """Lineas que pasan sobre una caja que no es de sus extremos (ni los contiene), con los puntos que dibuja StarUML y
+    el criterio de svg_revisar: sin las zonas (marcos, carriles...) y con la caja encogida 4 px, porque la linea llega
+    a su borde."""
+    cajas = [(doc.name_of(v['model']['$ref']), U._rect(v)) for v in dg['ownedViews'] if U._es_caja(v)
+             and isinstance(v.get('model'), dict) and not any(z in v['_type'] for z in R._ZONAS)]
+    cerca = lambda p, r: r[0] - 3 <= p[0] <= r[2] + 3 and r[1] - 3 <= p[1] <= r[3] + 3
+    res = []
+    for v in dg['ownedViews']:
+        if not isinstance(v.get('points'), str):
+            continue
+        pts = U._puntos_staruml(doc, v)
+        for nombre, r in cajas:
+            if not cerca(pts[0], r) and not cerca(pts[-1], r) and any(
+                    P._cruza(p, q, (r[0] + 4, r[1] + 4, r[2] - 4, r[3] - 4), 0) for p, q in zip(pts, pts[1:])):
+                res.append(f'{v["_type"]} sobre {nombre}')
+    return res
+
+
+def test_componentes_sin_lineas_sobre_cajas(galeria):
+    """G05: config, perfil y api-v2.jar en columna y un enlace de config a api-v2.jar que salta la fila de perfil. Ese
+    enlace va por su hueco, a un lado de perfil (no recto encima de el), y ninguna linea pasa sobre otra caja: es lo
+    que svg_revisar revisa en el SVG de StarUML."""
+    archivo, res = galeria
+    doc = M.Doc(archivo)
+    dg = doc.diagram('G05 Componentes')
+    assert res['G05 Componentes']['lineas_que_cruzan_cajas'] == []
+    assert lineas_sobre_cajas(doc, dg) == []
+    vista = {doc.name_of(v['model']['$ref']): v['_id'] for v in dg['ownedViews']
+             if U._es_caja(v) and isinstance(v.get('model'), dict)}
+    enlace = next(v for v in dg['ownedViews'] if v['_type'] == 'UMLLinkView' and {v['tail']['$ref'], v['head']['$ref']}
+                  == {vista['config: Configuracion'], vista['api-v2.jar']})
+    assert len(U._puntos_staruml(doc, enlace)) > 2
+
+
+def test_ninguna_linea_queda_en_el_aire_junto_a_un_icono(galeria):
+    """La caja de un icono (actor, artefacto...) es tan ancha como su nombre: ninguna linea le llega por un costado ni
+    por arriba fuera de su dibujo (en G05, los dos enlaces que llegan a api-v2.jar; en G08, la generalizacion que sale
+    de Cliente frecuente)."""
+    archivo, _ = galeria
+    doc = M.Doc(archivo)
+    assert [x for g in G.GALERIA for x in en_el_aire(doc, doc.diagram(g['nombre']))] == []
 
 
 def test_detecta_la_linea_que_sale_de_un_contenedor(vacio):

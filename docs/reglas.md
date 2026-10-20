@@ -174,9 +174,12 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
   en `lineas_que_cruzan_cajas` las que aun así cruzan alguna: no promete un diagrama sin
   cruces. A los íconos con el nombre abajo (eventos y compuertas BPMN, objetos de datos...)
   les reserva el ancho de su nombre, y las líneas que les llegan desde abajo entran por un
-  costado. Un elemento `dentro` o `sobre` de sí mismo, o un ciclo de contención, es un
-  error. Las relaciones pueden ir en cualquier orden: la que usa a otra como extremo (un
-  mensaje de comunicación sobre su conector) se dibuja después de ella.
+  costado. En los íconos que llevan el nombre dentro de su caja (actor, artefacto, bola de
+  una interfaz) la caja es tan ancha como el nombre: las líneas que les llegan por arriba
+  entran sobre el dibujo, no en el resto de la caja. Un elemento `dentro` o `sobre` de sí
+  mismo, o un ciclo de contención, es un error. Las relaciones pueden ir en cualquier orden:
+  la que usa a otra como extremo (un mensaje de comunicación sobre su conector) se dibuja
+  después de ella.
 - Despliegue: los nodos y entornos de ejecución se anidan (servidor > contenedor), los
   artefactos van en el nodo donde se despliegan o se unen con `Deployment`, y los nodos
   se comunican con `Communication Path`, con el protocolo como nombre.

@@ -13,7 +13,7 @@ import shutil
 import pytest
 
 from staruml_mcp import render as R
-from apoyo import LIFELINES, PROGRAMA_JAVA, RAIZ, M, fuentes, ok, tool
+from apoyo import LIFELINES, PROGRAMA_JAVA, RAIZ, M, en_el_aire, fuentes, ok, tool
 
 
 def carpeta_revision():
@@ -211,29 +211,9 @@ def test_staruml_dibuja_un_despliegue_generado(vacio, tmp_path, staruml):
     guardar_para_revision(svg, informe=rev, nombre_informe='despliegue_svg_revisar.json')
 
 
-def _en_el_aire(doc, dg):
-    """Lineas que le llegan por un costado a un icono (actor, artefacto...): su caja es mas ancha que el dibujo, asi
-    que StarUML las deja terminando en el aire. Se calcula con los extremos que dibuja StarUML."""
-    from staruml_mcp import uml as U
-    res = []
-    for v in dg.get('ownedViews', []):
-        if not isinstance(v.get('points'), str):
-            continue
-        pts = U._puntos_staruml(doc, v)
-        for k, p in (('tail', pts[0]), ('head', pts[-1])):
-            x = doc.ids.get((v.get(k) or {}).get('$ref'))
-            if x is None or not U._es_caja(x) or not (x.get('stereotypeDisplay') == 'icon'
-                                                     or x.get('_type') == 'UMLActorView'):
-                continue
-            r = U._rect(x)
-            if (abs(p[0] - r[0]) <= 1 or abs(p[0] - r[2]) <= 1) and r[1] + 1 < p[1] < r[3] - 1:
-                res.append(f'{dg.get("name")}: {v["_type"]} llega por un costado a {doc.name_of(x["model"]["$ref"])}')
-    return res
-
-
 def test_staruml_dibuja_casos_de_uso_con_sistema(vacio, tmp_path, staruml):
     """Actor arriba y casos de uso en fila dentro del sistema, con el nombre del sistema justo arriba del caso de en
-    medio: la linea hacia ese caso no cruza el nombre (lo rodea) y ninguna llega por un costado a un actor."""
+    medio: la linea hacia ese caso no cruza el nombre (lo rodea) y ninguna termina en el aire junto a un actor."""
     casos = ('Confirmar renta', 'Cotizar renta', 'Registrar solicitud')
     dg = ok(tool('mdj_diagrama_crear', archivo=vacio, tipo='casos_de_uso', nombre='Renta'))['diagrama']
     ok(tool('mdj_diagrama_generar', archivo=vacio, diagrama=dg, elementos=[
@@ -248,7 +228,7 @@ def test_staruml_dibuja_casos_de_uso_con_sistema(vacio, tmp_path, staruml):
     guardar_para_revision(svg, informe=rev, nombre_informe='casos_de_uso_svg_revisar.json')
     assert rev['n_problemas'] == 0, rev['problemas']
     doc = M.Doc(vacio)
-    assert not _en_el_aire(doc, doc.diagram('Renta'))
+    assert not en_el_aire(doc, doc.diagram('Renta'))
 
 
 # observaciones de svg_revisar que quedan en la galeria: ninguna (lineas y nombres ya no cruzan cajas ni textos). La
@@ -278,7 +258,7 @@ def test_staruml_dibuja_la_galeria(tmp_path, staruml):
     assert total <= MAX_OBSERVACIONES_GALERIA, informe
     # ninguna linea termina en el aire junto a un icono (la de robustez la acomoda staruml_robustez)
     doc = M.Doc(archivo)
-    assert not [x for g in G.GALERIA for x in _en_el_aire(doc, doc.diagram(g['nombre']))]
+    assert not [x for g in G.GALERIA for x in en_el_aire(doc, doc.diagram(g['nombre']))]
 
 
 def test_staruml_dibuja_nota_y_enlace_de_nota_fuera_de_clases(vacio, tmp_path, staruml):
