@@ -305,11 +305,12 @@ def extraer_elementos_diagrama(doc, nombre_diagrama: str) -> Dict[str, Any]:
                 asociaciones.append({'id': el['_id'], 'origen': c1, 'destino': c2, 'mult_origen': e1.get('multiplicity', ''),
                                      'mult_destino': e2.get('multiplicity', ''), 'rol_origen': e1.get('name', ''),
                                      'rol_destino': e2.get('name', ''), 'navegable': nav2, 'navegable_inverso': nav1})
-                for (desde, hacia, fin, nav, k) in ((c1, c2, e2, nav2, k1), (c2, c1, e1, nav1, k2)):
+                for (desde, hacia, fin, nav, k, k_otro) in ((c1, c2, e2, nav2, k1, k2), (c2, c1, e1, nav1, k2, k1)):
                     if nav and k is not None:
                         clases[k]['asociaciones'].append({'id': el['_id'], 'origen': desde, 'destino': hacia,
                                                           'mult_destino': fin.get('multiplicity', ''),
-                                                          'rol_destino': fin.get('name', ''), 'navegable': True})
+                                                          'rol_destino': fin.get('name', ''), 'navegable': True,
+                                                          'destino_en_diagrama': k_otro is not None})
             elif el.get('_type') in ('UMLGeneralization', 'UMLInterfaceRealization'):
                 sub, sup = doc.ids.get(el.get('source', {}).get('$ref')), doc.ids.get(el.get('target', {}).get('$ref'))
                 if sub and sup:
@@ -333,6 +334,12 @@ def extraer_elementos_diagrama(doc, nombre_diagrama: str) -> Dict[str, Any]:
                 'mensajes': sec.get('mensajes', [])}
 
     return {'tipo_diagrama': tipo_dg, 'nombre': dg.get('name')}
+
+
+def _destino_fuera_del_diagrama(asoc: Dict[str, Any], clases: Dict[str, Any]) -> bool:
+    """Si el otro extremo de la asociacion no esta dibujado en el diagrama: por id cuando la extraccion lo marco, si no
+    por nombre. El generador no escribe su campo (no compilaria) y la comparacion no lo exige."""
+    return asoc.get('destino_en_diagrama') is False or asoc['destino'] not in clases
 
 
 # ---------------------------------------------------------------------------
@@ -1565,17 +1572,22 @@ def _comparar_clases_con_codigo(uml: Dict[str, Any], codigo: Dict[str, Any]) -> 
         mets_uml = {_normalizar_nombre(m['nombre']) for m in c_uml.get('metodos', [])}
 
         verificadas, faltan_asoc, mult_mal, usados_asoc = [], [], [], set()
-        for asoc in c_uml.get('asociaciones', []):
-            if asoc.get('origen') != nom_uml or not asoc.get('navegable'):
-                continue
+        # primero las que se exigen. Las que van a una clase que no esta en el diagrama no se exigen (el codigo generado
+        # tampoco las trae); si el codigo si tiene su campo, ese campo no sale como atributo de mas
+        propias = [a for a in c_uml.get('asociaciones', []) if a.get('origen') == nom_uml and a.get('navegable')]
+        for asoc in sorted(propias, key=lambda a: _destino_fuera_del_diagrama(a, clases_uml)):
             destino, mult = asoc['destino'], asoc.get('mult_destino', '')
             if clases_uml.get(destino, {}).get('tipo') == 'UMLActor':
                 continue  # hacia un actor (externo) no hay campo que exigir
-            etiqueta = f"{nom_uml} -> {destino} ({mult})"
-            total += 2
             clave_dest, rol = _normalizar_nombre(destino), _normalizar_nombre(asoc.get('rol_destino', ''))
             campo = next((a for k, a in attrs_cod.items() if k not in usados_asoc and clave_dest in _nombres_en_tipo(a['tipo'])), None) \
                 or (attrs_cod.get(rol) if rol and rol not in usados_asoc else None)
+            if _destino_fuera_del_diagrama(asoc, clases_uml):
+                if campo:
+                    usados_asoc.add(_normalizar_nombre(campo['nombre']))
+                continue
+            etiqueta = f"{nom_uml} -> {destino} ({mult})"
+            total += 2
             if not campo:
                 faltan_asoc.append(etiqueta)
                 continue
@@ -1821,7 +1833,7 @@ def _campos_asociacion(c, lang, todas=None):
         if asoc.get('origen') != c['nombre'] or not asoc.get('navegable'):
             continue
         dest = asoc['destino']
-        if todas is not None and (dest not in todas or todas[dest].get('tipo') == 'UMLActor'):
+        if todas is not None and (_destino_fuera_del_diagrama(asoc, todas) or todas[dest].get('tipo') == 'UMLActor'):
             continue
         coleccion = _es_coleccion_mult(asoc.get('mult_destino', ''))
         if asoc.get('rol_destino'):

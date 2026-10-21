@@ -243,6 +243,11 @@ herramienta, para que quien la use obtenga el diagrama correcto a la primera:
   `test_clase_que_se_llama_igual_en_otro_paquete_no_toma_sus_relaciones`.
 - Cada id dibujado guarda su clave en `clases`: una clase sin `name` (un .mdj editado a mano) queda con la clave `''`
   y sus relaciones van ahí, sin `KeyError`. Lo cubre `test_clase_dibujada_sin_nombre_no_rompe_la_extraccion`.
+- Asociaciones hacia una clase que no está en el diagrama (por id): la extracción marca `destino_en_diagrama` y el
+  generador y la comparación usan el mismo criterio (`_destino_fuera_del_diagrama`). El generador no escribe el campo
+  (no compilaría) y la comparación no lo exige; si el código sí lo tiene, el campo no sale como atributo de más. Antes
+  la comparación lo pedía y el código generado del diagrama no llegaba al 100 %. Lo cubre
+  `test_asociacion_hacia_una_clase_que_no_esta_en_el_diagrama`.
 
 ## 4. Convenciones y Reglas Inquebrantables
 

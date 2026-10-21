@@ -89,8 +89,8 @@ En la columna **Tipo**:
 
 | Herramienta | Tipo | Qué hace |
 |---|---|---|
-| `staruml_comparar_codigo` | lectura | Compara un diagrama de clases o de secuencia contra el código y da el porcentaje de coincidencia con lo que falta o sobra: clases, atributos con su tipo, métodos, herencia, asociaciones con su multiplicidad y llamadas. |
-| `staruml_diagrama_a_codigo` | cambia | Genera esqueletos de clases en Java, Python, TypeScript o C# con atributos, métodos, herencia y asociaciones, conservando los tipos del modelo. No reemplaza archivos que ya existan salvo con `sobrescribir: true`. |
+| `staruml_comparar_codigo` | lectura | Compara un diagrama de clases o de secuencia contra el código y da el porcentaje de coincidencia con lo que falta o sobra: clases, atributos con su tipo, métodos, herencia, asociaciones con su multiplicidad (las que van a una clase que no está en el diagrama no se exigen, como en el código de `staruml_diagrama_a_codigo`) y llamadas. |
+| `staruml_diagrama_a_codigo` | cambia | Genera esqueletos de clases en Java, Python, TypeScript o C# con atributos, métodos, herencia y asociaciones (solo hacia clases del mismo diagrama), conservando los tipos del modelo. No reemplaza archivos que ya existan salvo con `sobrescribir: true`. |
 | `staruml_codigo_a_diagrama` | cambia | Importa clases, atributos con su tipo y métodos desde el código a un paquete del `.mdj`. Solo agrega lo que falta; con `modo: "sincronizar"` también pone el tipo del código en los atributos que ya existen y reporta lo que el código ya no tiene, sin quitarlo. |
 | `staruml_programa_a_diagrama` | cambia | Dibuja el diagrama de clases de un programa ya hecho. Si es grande y tiene varios paquetes, hace un diagrama por paquete. |
 

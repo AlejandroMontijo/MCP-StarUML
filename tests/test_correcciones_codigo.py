@@ -269,6 +269,35 @@ def test_clase_dibujada_sin_nombre_no_rompe_la_extraccion(dominio, nombre):
         assert clases['']['superclases'] == ['Cliente']
 
 
+def test_asociacion_hacia_una_clase_que_no_esta_en_el_diagrama(dominio, tmp_path):
+    """Cliente -> Pedido (0..*) es una asociacion de verdad, pero Pedido no esta en el diagrama: el codigo generado no
+    trae el campo (no compilaria) y la comparacion no lo pide. Si el codigo si lo tiene, no sale como atributo de mas.
+    Antes la comparacion lo pedia y no llegaba al 100 %."""
+    doc = M.Doc(dominio)
+    cli, direc = (next(e for e in doc.ids.values() if e and e.get('_type') == 'UMLClass' and e.get('name') == n)
+                  for n in ('Cliente', 'Direccion'))
+    dg = ok(tool('mdj_diagrama_crear', archivo=dominio, tipo='clases', nombre='Solo cliente', dentro_de='Analisis'))['diagrama']
+    for x, el in zip((40, 240), (cli, direc)):
+        ok(tool('mdj_vista_agregar', archivo=dominio, diagrama=dg, elemento=el['_id'], x=x, y=100))
+    asocs = C.extraer_elementos_diagrama(M.Doc(dominio), dg)['clases']['Cliente']['asociaciones']
+    assert [(a['destino'], a['destino_en_diagrama']) for a in asocs] == [('Pedido', False)]
+    out = str(tmp_path / 'java')
+    ok(tool('staruml_diagrama_a_codigo', archivo=dominio, diagrama=dg, lenguaje='java', carpeta_salida=out))
+    assert 'Pedido' not in open(os.path.join(out, 'Cliente.java'), encoding='utf-8').read()
+    compilado = compilar_java(out)
+    assert compilado is None or compilado[0], compilado
+    r = ok(tool('staruml_comparar_codigo', archivo=dominio, diagrama=dg, ruta_codigo=out, lenguaje='java'))
+    assert r['porcentaje_sincronizacion'] == 100.0, r['detalles_por_clase']
+    # el codigo de todo el dominio si trae List<Pedido> pedidos: no falta nada y el campo no sobra
+    todo = str(tmp_path / 'todo')
+    ok(tool('staruml_diagrama_a_codigo', archivo=dominio, diagrama='cu_1', lenguaje='java', carpeta_salida=todo))
+    assert 'List<Pedido> pedidos' in open(os.path.join(todo, 'Cliente.java'), encoding='utf-8').read()
+    r = ok(tool('staruml_comparar_codigo', archivo=dominio, diagrama=dg, ruta_codigo=todo, lenguaje='java'))
+    det = r['detalles_por_clase']['Cliente']
+    assert det['asociaciones'] == {'verificadas_en_codigo': [], 'faltantes_en_codigo': [], 'multiplicidad_incorrecta': []}
+    assert det['atributos']['sobran_en_codigo'] == [] and r['porcentaje_sincronizacion'] == 100.0, det
+
+
 def test_comparar_revisa_la_herencia(dominio, tmp_path):
     out = str(tmp_path / 'java')
     ok(tool('staruml_diagrama_a_codigo', archivo=dominio, diagrama='cu_1', lenguaje='java', carpeta_salida=out))
