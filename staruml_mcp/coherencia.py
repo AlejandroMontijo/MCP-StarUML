@@ -45,6 +45,11 @@ _IDENT = re.compile(r'[^\W\d][\w ]*')                          # nombre (con esp
 _RUTA = re.compile(r'[^\W\d]\w*(?:\.[^\W\d]\w*)+')             # cliente.rfc
 _PALABRA = re.compile(r'[A-ZÁÉÍÓÚÑÜ]+(?![a-záéíóúñü])|[A-ZÁÉÍÓÚÑÜ]?[a-záéíóúñü]+|\d+')
 _ACCESOR = re.compile(r'(?:get|set|is)(?=[A-Z_\d])')         # getTotal, setEstado, isActivo
+# un argumento que es un tipo (registrarBitacora(DetallesBitacoraDTO), obtenerIdPorNumero(Long)) muestra la firma de la
+# operacion, no un dato: no se le busca origen. Los nombres de clase del modelo ya se aceptan (globales).
+_TIPOS_BASICOS = {'string', 'long', 'integer', 'int', 'double', 'float', 'boolean', 'char', 'character', 'short',
+                  'byte', 'bigdecimal', 'biginteger', 'localdate', 'localdatetime', 'localtime', 'date', 'list',
+                  'set', 'map', 'object', 'void'}
 _MILES_ANTES = re.compile(r'[-+]?\$?\d{1,3}(?:,\d{3})*')    # antes de una coma de miles: $1 o $1,500
 _MILES_DESPUES = re.compile(r'\d{3}(?!\d)')                 # despues: tres digitos justos
 
@@ -647,7 +652,8 @@ def revisar_secuencias(doc, secuencias=None, clases=None, metodos='control', par
             k = doc.kind(el)
             if metodos == 'control' and k != 'control':
                 continue
-            ops = [op for op in el.get('operations') or [] if isinstance(op, dict) and op.get('_id')]
+            ops = [op for op in el.get('operations') or [] if isinstance(op, dict) and op.get('_id')
+                   and not op.get('isStatic') and op.get('name') != el.get('name')]
             if k == 'control' and not idx.operaciones(tid):
                 generales['avisos'].append({
                     'clase': el.get('name'), 'revision': 'metodos',
@@ -832,7 +838,7 @@ def _revisar_una(doc, idx, dg, it, metodos, parametros, dg_clases, dibujados, us
             faltan, vistos = [], set()
             for a in args:
                 for nm in _nombres_en(a):
-                    if (_norm(nm) in idx.enum_literales or _norm(nm) in vistos
+                    if (_norm(nm) in idx.enum_literales or _norm(nm) in vistos or _norm(nm) in _TIPOS_BASICOS
                             or _explicado(nm, completos, partes, sueltas)):
                         continue
                     vistos.add(_norm(nm))

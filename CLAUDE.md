@@ -249,6 +249,24 @@ herramienta, para que quien la use obtenga el diagrama correcto a la primera:
   la comparación lo pedía y el código generado del diagrama no llegaba al 100 %. Lo cubre
   `test_asociacion_hacia_una_clase_que_no_esta_en_el_diagrama`.
 
+## 3i. Secuencias y diagramas de diseño (2026-10-21)
+
+- Un modelo con la fase de diseño (como el ejemplo de la sesión de análisis a diseño: UsuarioExterno → interfaz del
+  subsistema → fachada «Facade» → control → objetos de negocio «Singleton», con los tipos en los mensajes) daba en
+  `mdj_validar` un "Mensaje no válido en OOSE" por cada mensaje de diseño y un aviso por el control en etiqueta.
+  `mdj.secuencia_de_analisis(doc, dg)` dice si todas las lifelines son actores o clases de robustez; las reglas de
+  mensajes de `reglas_oose` y la de "a los actores solo les hablan las boundaries" de
+  `test_reglas_de_robustez_del_caso_de_uso` se aplican solo a esas. La notación de iconos se exige solo en diagramas
+  de clases sin clases de diseño. La estructura de las vistas de mensaje se revisa en todas.
+- `mdj_secuencia_revisar`: un argumento que es un tipo (`Long`, `String`, `List`...; los nombres de clase del modelo ya
+  se aceptaban) no se revisa, y los constructores y métodos de clase (`getInstance`) no se piden en las secuencias.
+- `generar_secuencia`: una llamada hacia la derecha justo después de un auto-mensaje de quien llama deja el ancho de la
+  activación anidada. Antes su etiqueta pisaba esa activación, que termina justo antes del mensaje y crece si se baja:
+  el mensaje se bajaba cientos de píxeles (en un caso, unos 1750).
+- `test_java_de_cada_diagrama_de_clases_del_modelo_real_compila`: las clases de otros diagramas que usa el código (los
+  DTO en la interfaz de un subsistema) se compilan vacías junto (`clases_de_otros_diagramas`).
+- Lo cubre `tests/test_secuencias_de_diseno.py` (las cinco fallan sin estos cambios).
+
 ## 4. Convenciones y Reglas Inquebrantables
 
 1. **Reglas de Git:**

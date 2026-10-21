@@ -663,6 +663,22 @@ def _no_accesores(o):
     return res
 
 
+ROBUSTEZ = ('boundary', 'control', 'entity')
+
+
+def secuencia_de_analisis(doc, dg):
+    """True si todas las lifelines del diagrama de secuencia son actores o clases de robustez (boundary, control,
+    entity). Una secuencia de diseno (interfaces, fachadas, objetos de negocio...) no sigue las reglas de OOSE."""
+    it = interaction_of(doc, dg)
+    tipos = []
+    for l in it.get('participants', []):
+        rol = doc.ids.get(l.get('represent', {}).get('$ref')) if l.get('represent') else None
+        t = doc.ids.get(rol['type']['$ref']) if rol and isinstance(rol.get('type'), dict) else None
+        tipos.append(t)
+    return bool(tipos) and all(t is not None and (t['_type'] == 'UMLActor' or (t['_type'] == 'UMLClass' and doc.kind(t) in ROBUSTEZ))
+                               for t in tipos)
+
+
 def reglas_oose(doc, metodos='ninguno'):
     """Reglas de robustez. metodos: 'ninguno' (default): ninguna clase de analisis (boundary, control, entity) ni actor
     lleva metodos; 'control_getset': el control puede tener metodos, cada entity solo get/set/is de sus propios
@@ -730,10 +746,12 @@ def reglas_oose(doc, metodos='ninguno'):
         if dg['_type'] not in ('UMLClassDiagram', 'UMLUseCaseDiagram'):
             continue
         cajas = []
+        de_diseno = any(v['_type'] == 'UMLClassView' and isinstance(v.get('model'), dict)
+                        and kinds.get(v['model'].get('$ref')) not in ROBUSTEZ for v in dg.get('ownedViews', []))
         for v in dg.get('ownedViews', []):
             m = v.get('model')
-            if v['_type'] == 'UMLClassView' and isinstance(m, dict) and kinds.get(m.get('$ref')) in ('boundary', 'control', 'entity') \
-                    and v.get('stereotypeDisplay', 'label') != 'icon':
+            if v['_type'] == 'UMLClassView' and isinstance(m, dict) and kinds.get(m.get('$ref')) in ROBUSTEZ \
+                    and not de_diseno and v.get('stereotypeDisplay', 'label') != 'icon':
                 avisos.append(f'{dg.get("name")}: {doc.name_of(m["$ref"])} no usa la notacion de iconos')
             if v['_type'] in cajas_tipos and v.get('visible', True) is not False and all(isinstance(v.get(k), (int, float)) for k in ('left', 'top', 'width', 'height')):
                 cajas.append((doc.name_of(m['$ref']) if isinstance(m, dict) else 'nota', v['left'], v['top'], v['left'] + v['width'], v['top'] + v['height']))
@@ -757,7 +775,7 @@ def reglas_oose(doc, metodos='ninguno'):
             role = doc.ids.get(l.get('represent', {}).get('$ref')) if l.get('represent') else None
             t = role.get('type', {}).get('$ref') if role and isinstance(role.get('type'), dict) else None
             tipo_ll[l['_id']] = t
-        for n, m in enumerate(msgs, 1):
+        for n, m in enumerate(msgs if secuencia_de_analisis(doc, dg) else [], 1):
             s, t = tipo_ll.get(m['source']['$ref']), tipo_ll.get(m['target']['$ref'])
             ks, kt = kinds.get(s, '?'), kinds.get(t, '?')
             rep = m.get('messageSort') == 'reply'
@@ -1959,7 +1977,13 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
     for k, m in enumerate(mensajes):
         i, j = sorted((orden[m['de']], orden[m['a']]))
         if i != j:
-            minimo[(i, j)] = max(minimo.get((i, j), 0), ancho13(f'{k + 1} : {m["nombre"]}') + op['margen_etiqueta'])
+            # justo despues de un auto-mensaje de quien llama, su activacion anidada asoma a la derecha de la lifeline:
+            # una llamada hacia la derecha deja ademas ese ancho para que su etiqueta no la pise
+            previo = mensajes[k - 1] if k else None
+            anidada = (previo is not None and previo['de'] == previo['a'] == m['de'] and orden[m['a']] > orden[m['de']])
+            extra = max(0, 44 - op['margen_etiqueta']) if anidada else 0
+            minimo[(i, j)] = max(minimo.get((i, j), 0),
+                                 ancho13(f'{k + 1} : {m["nombre"]}') + op['margen_etiqueta'] + extra)
         elif i + 1 < len(claves):
             minimo[(i, i + 1)] = max(minimo.get((i, i + 1), 0),
                                      AUTO_ETIQUETA + 14 + ancho13(f'{k + 1} : {m["nombre"]}') + op['margen_etiqueta'])
@@ -2066,13 +2090,17 @@ def generar_secuencia(doc, diagrama, lifelines, mensajes, opciones=None):
             o, t, y = plan[k][0], plan[k][1], plan[k][4]
             if o == t:
                 _, izq, arriba = geometria_auto(k, centro_ll[t], y)
-                cajas.append((izq, arriba, izq + 14, arriba + h))
+                cajas.append((k, izq, arriba, izq + 14, arriba + h))
             else:
-                cajas.append((centro_ll[t] - 7, y, centro_ll[t] + 7, y + h))
+                cajas.append((k, centro_ll[t] - 7, y, centro_ll[t] + 7, y + h))
         choque = None
         for k, (o, t, nom, rep, y) in enumerate(plan):
             e0, e1, top, bot = caja_etiqueta(k, o, t, nom, y)
-            for (x0, y0, x1, y1) in cajas:
+            for (kk, x0, y0, x1, y1) in cajas:
+                # la activacion del auto-mensaje anterior de quien llama termina justo antes de este mensaje: bajarlo
+                # la alarga igual y nunca se libra (antes lo bajaba cientos de pixeles); de eso se encarga el ancho
+                if kk == k - 1 and plan[kk][0] == plan[kk][1] == o:
+                    continue
                 if x0 - 3 < e1 and x1 + 3 > e0 and y0 < bot and y1 + 2 > top:
                     choque = (k, y1 + 2 - top + rnd.randint(1, 3)); break
             if choque:

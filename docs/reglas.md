@@ -90,7 +90,9 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
   mensajes o recibe replies). Así cada mensaje sale de una caja.
 - Separación entre lifelines: al menos lo que mide la etiqueta más larga que viaja entre
   ellas, más un margen. Si una etiqueta cae sobre una activación abierta, se baja el
-  mensaje.
+  mensaje. Una llamada hacia la derecha justo después de un auto-mensaje de quien llama
+  deja además el ancho de la activación anidada (bajarla no la libra: esa activación
+  termina justo antes de ella).
 - Auto-mensaje (`de` igual a `a`): lazo de 30 × 15 px a la derecha de la activación que
   llama, activación anidada 7 px a la derecha y texto a la derecha del lazo. Se permite en
   control y entity (procesamiento interno); en una boundary es aviso (la lógica va en el
@@ -98,6 +100,11 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
 - Lifelines: height = fin - 40; linePart top = 106 y height = h - 66. El marco se ajusta
   al contenido.
 - Una lifeline sin nombre con rol tipado se ve como ": Tipo".
+- Las reglas de OOSE de los mensajes (actor → boundary → control → entity) son del análisis:
+  `mdj_validar` las aplica solo a las secuencias cuyas lifelines son actores o clases de
+  robustez. Una de diseño (interfaz del subsistema, fachada, objetos de negocio) no las sigue;
+  la estructura de sus vistas sí se revisa. Lo mismo la notación de iconos: en un diagrama de
+  clases de diseño el control puede ir en etiqueta junto a las demás clases.
 - Con `mdj_dibujar`, `mdj_vista_agregar` y `mdj_diagrama_generar` los mensajes llegan a la
   línea punteada de la lifeline de destino (si llegan a la caja, StarUML corta la flecha en
   su borde y no dibuja la activación). La lifeline que crea un mensaje de creación empieza
@@ -112,7 +119,9 @@ Convenciones y estándares de buenas prácticas de análisis, diseño y arquitec
   realización (aviso si la asociación solo navega al revés o no navega); los mensajes al control con
   el nombre y los parámetros de una de sus operaciones (los `mostrarX` a una boundary no se exigen;
   si el control no tiene operaciones, solo da un aviso) y avisa de las operaciones del control que
-  ningún mensaje usa; argumentos que no salen de ningún lado (aviso); cada reply de regreso a quien
+  ningún mensaje usa (no los constructores ni los métodos de clase, como el `getInstance` de un
+  Singleton); argumentos que no salen de ningún lado (aviso; un argumento que es un tipo, como
+  `buscarCuenta(Long)`, muestra la firma y no se revisa); cada reply de regreso a quien
   llamó mientras esa llamada sigue abierta (cuando quien llamó manda otro mensaje, sus llamadas
   anteriores ya regresaron; en un fragmento `alt` o `par`, una reply en otra rama no cuenta como
   repetida). Con un diagrama de clases, también marca los tipos que no están dibujados en él y avisa

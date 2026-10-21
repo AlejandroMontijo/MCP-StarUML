@@ -42,8 +42,8 @@ def test_integro_y_sin_problemas_oose(real):
 
 def test_reglas_de_robustez_del_caso_de_uso(real):
     """Un solo control por paquete de caso de uso, estereotipos de robustez como referencia al perfil (las clases de
-    diseno pueden llevar el suyo como texto) y en las secuencias: nada de control->actor ni replies de boundary a
-    actor; a los actores solo les hablan las boundaries."""
+    diseno pueden llevar el suyo como texto) y en las secuencias de analisis: nada de control->actor ni replies de
+    boundary a actor; a los actores solo les hablan las boundaries."""
     doc = M.Doc(real)
     texto = estereotipos_de_robustez_como_texto(doc)
     assert not texto, f'estereotipo como texto: {texto}'
@@ -53,6 +53,8 @@ def test_reglas_de_robustez_del_caso_de_uso(real):
             controles.setdefault(doc.parent.get(o['_id']), []).append(o['name'])
     assert controles and all(len(v) == 1 for v in controles.values()), controles
     for dg in diagramas(real, 'UMLSequenceDiagram'):
+        if not M.secuencia_de_analisis(doc, dg):
+            continue  # las de diseno (interfaz, fachada, objetos de negocio) no siguen las reglas de robustez
         for m in M.secuencia(doc, dg['_id'])['mensajes']:
             ks, kt = m['tipos'].split('->')
             assert (ks, kt) != ('control', 'actor'), (dg.get('name'), m)

@@ -3,6 +3,7 @@
 # programa_a_diagrama (anidadas, namespaces, modulos y carpetas como paquetes, imports, campos genericos). Tambien las
 # clases anidadas de Python y los tipos con su tamano (char, short, byte, float, Long) de ida y vuelta.
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -55,13 +56,31 @@ def programa(tmp_path, nombre, archivos, **op):
     return r, M.Doc(mdj)
 
 
-def compilar_java(carpeta):
+def compilar_java(carpeta, *otras):
     javac = shutil.which('javac')
     if not javac:
         return None
-    archivos = sorted(os.path.join(carpeta, f) for f in os.listdir(carpeta) if f.endswith('.java'))
+    archivos = sorted(os.path.join(c, f) for c in (carpeta,) + otras for f in os.listdir(c) if f.endswith('.java'))
     cp = subprocess.run([javac, '-d', os.path.join(carpeta, 'bin')] + archivos, capture_output=True, text=True)
     return cp.returncode == 0, cp.stderr[-1500:]
+
+
+def clases_de_otros_diagramas(doc, carpeta, destino):
+    """Clases e interfaces del modelo que usa el codigo generado sin estar en su diagrama (en un diseno, la interfaz
+    del subsistema recibe y regresa los DTO de otro paquete): se escriben vacias en destino, en el mismo paquete, solo
+    para compilar."""
+    escritas = {f[:-5] for f in os.listdir(carpeta) if f.endswith('.java')}
+    codigo = ''.join(open(os.path.join(carpeta, f), encoding='utf-8').read() for f in os.listdir(carpeta) if f.endswith('.java'))
+    paquete = re.search(r'^package ([\w.]+);', codigo, re.M)
+    usados = set(re.findall(r'\b[A-Z]\w*\b', codigo))
+    os.makedirs(destino, exist_ok=True)
+    for o in doc.ids.values():
+        if o and o['_type'] in ('UMLClass', 'UMLInterface') and o.get('name') in usados - escritas:
+            tipo = 'interface' if o['_type'] == 'UMLInterface' else 'class'
+            with open(os.path.join(destino, o['name'] + '.java'), 'w', encoding='utf-8') as f:
+                f.write((f'package {paquete.group(1)};\n' if paquete else '') + f'public {tipo} {o["name"]} {{}}\n')
+            escritas.add(o['name'])
+    return destino
 
 
 # --- importador ---
@@ -629,7 +648,8 @@ def test_programa_en_go_coincide_con_su_codigo(tmp_path):
 
 def test_java_de_cada_diagrama_de_clases_del_modelo_real_compila(real, tmp_path):
     """Con el modelo real (STARUML_MCP_MODELO_REAL o pruebas/*.mdj; sin el se omite), el Java de cada diagrama de clases
-    compila aunque las entidades traigan sus get/set como operaciones, y vuelve al 100 %. El modelo no se modifica."""
+    compila aunque las entidades traigan sus get/set como operaciones, y vuelve al 100 %. Las clases de otros diagramas
+    que use (los DTO en la interfaz de un subsistema) se compilan vacias junto. El modelo no se modifica."""
     if not shutil.which('javac'):
         pytest.skip('sin javac')
     antes = open(real, 'rb').read()
@@ -641,7 +661,8 @@ def test_java_de_cada_diagrama_de_clases_del_modelo_real_compila(real, tmp_path)
         r = ok(tool('staruml_diagrama_a_codigo', archivo=real, diagrama=dg['_id'], lenguaje='java', carpeta_salida=out))
         if not r['escritos']:
             continue
-        compilado = compilar_java(out)
+        otras = clases_de_otros_diagramas(M.Doc(real), out, str(tmp_path / f'otras{probados}'))
+        compilado = compilar_java(out, otras)
         assert compilado[0], (dg.get('name'), compilado[1])
         cmp = ok(tool('staruml_comparar_codigo', archivo=real, diagrama=dg['_id'], ruta_codigo=out, lenguaje='java'))
         assert cmp['porcentaje_sincronizacion'] == 100.0, (dg.get('name'), cmp['detalles_por_clase'])
