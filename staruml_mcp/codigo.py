@@ -249,7 +249,7 @@ def extraer_elementos_diagrama(doc, nombre_diagrama: str) -> Dict[str, Any]:
 
     if tipo_dg == 'UMLClassDiagram':
         clases, asociaciones, generalizaciones = {}, [], []
-        dibujadas = set()  # ids de las clases del diagrama
+        dibujadas = {}  # id de cada clase del diagrama -> su clave en 'clases'
         # en el orden de las vistas (no de un set): la respuesta sale igual cada vez
         ids_en_diagrama = list(dict.fromkeys(v['model']['$ref'] for v in dg.get('ownedViews', [])
                                              if isinstance(v.get('model'), dict) and '$ref' in v['model']))
@@ -281,7 +281,7 @@ def extraer_elementos_diagrama(doc, nombre_diagrama: str) -> Dict[str, Any]:
                 'documentacion': el.get('documentation', ''), 'atributos': attrs, 'metodos': metodos,
                 'literales': [l.get('name', '') for l in el.get('literals', [])],
                 'superclases': [], 'interfaces': [], 'asociaciones': []}
-            dibujadas.add(cid)
+            dibujadas[cid] = el.get('name', '')
 
         # asociaciones: una entrada por cada sentido navegable, en la clase desde la que se navega.
         # 'navigable' cuenta; 'notNavigable' no; sin especificar (el default de StarUML) se toma como el sentido
@@ -296,8 +296,8 @@ def extraer_elementos_diagrama(doc, nombre_diagrama: str) -> Dict[str, Any]:
                     continue
                 c1, c2 = o1.get('name'), o2.get('name')
                 # por id y no por nombre: una clase de otro paquete que se llama igual no es la del diagrama
-                d1, d2 = o1['_id'] in dibujadas, o2['_id'] in dibujadas
-                if not d1 and not d2:
+                k1, k2 = dibujadas.get(o1['_id']), dibujadas.get(o2['_id'])
+                if k1 is None and k2 is None:
                     continue
                 n1, n2 = e1.get('navigable'), e2.get('navigable')
                 nav2 = n2 == 'navigable' or (n2 is None and n1 != 'navigable')
@@ -305,11 +305,11 @@ def extraer_elementos_diagrama(doc, nombre_diagrama: str) -> Dict[str, Any]:
                 asociaciones.append({'id': el['_id'], 'origen': c1, 'destino': c2, 'mult_origen': e1.get('multiplicity', ''),
                                      'mult_destino': e2.get('multiplicity', ''), 'rol_origen': e1.get('name', ''),
                                      'rol_destino': e2.get('name', ''), 'navegable': nav2, 'navegable_inverso': nav1})
-                for (desde, hacia, fin, nav, dibujada) in ((c1, c2, e2, nav2, d1), (c2, c1, e1, nav1, d2)):
-                    if nav and dibujada:
-                        clases[desde]['asociaciones'].append({'id': el['_id'], 'origen': desde, 'destino': hacia,
-                                                              'mult_destino': fin.get('multiplicity', ''),
-                                                              'rol_destino': fin.get('name', ''), 'navegable': True})
+                for (desde, hacia, fin, nav, k) in ((c1, c2, e2, nav2, k1), (c2, c1, e1, nav1, k2)):
+                    if nav and k is not None:
+                        clases[k]['asociaciones'].append({'id': el['_id'], 'origen': desde, 'destino': hacia,
+                                                          'mult_destino': fin.get('multiplicity', ''),
+                                                          'rol_destino': fin.get('name', ''), 'navegable': True})
             elif el.get('_type') in ('UMLGeneralization', 'UMLInterfaceRealization'):
                 sub, sup = doc.ids.get(el.get('source', {}).get('$ref')), doc.ids.get(el.get('target', {}).get('$ref'))
                 if sub and sup:
@@ -317,7 +317,7 @@ def extraer_elementos_diagrama(doc, nombre_diagrama: str) -> Dict[str, Any]:
                         generalizaciones.append({'subclase': sub.get('name'), 'superclase': sup.get('name')})
                     if sub['_id'] in dibujadas:
                         clave = 'superclases' if el['_type'] == 'UMLGeneralization' and sup['_type'] != 'UMLInterface' else 'interfaces'
-                        clases[sub['name']][clave].append(sup.get('name'))
+                        clases[dibujadas[sub['_id']]][clave].append(sup.get('name'))
         return {'tipo_diagrama': 'UMLClassDiagram', 'nombre': dg.get('name'), 'clases': clases,
                 'asociaciones': asociaciones, 'generalizaciones': generalizaciones}
 

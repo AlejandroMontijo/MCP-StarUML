@@ -254,6 +254,21 @@ def test_clase_que_se_llama_igual_en_otro_paquete_no_toma_sus_relaciones(dominio
     assert r['porcentaje_sincronizacion'] == 100.0, r['detalles_por_clase']
 
 
+@pytest.mark.parametrize('nombre', ['Cliente', 'ClienteVIP'])
+def test_clase_dibujada_sin_nombre_no_rompe_la_extraccion(dominio, nombre):
+    """Un .mdj editado a mano puede traer una clase sin 'name'. Sus asociaciones y su herencia se guardan bajo la
+    misma clave que la clase (''), sin KeyError."""
+    doc = M.Doc(dominio)
+    el = next(e for e in doc.ids.values() if e and e.get('_type') == 'UMLClass' and e.get('name') == nombre)
+    del el['name']
+    clases = C.extraer_elementos_diagrama(doc, 'cu_1')['clases']
+    assert clases['']['id'] == el['_id']
+    if nombre == 'Cliente':
+        assert [a['destino'] for a in clases['']['asociaciones']] == ['Pedido']
+    else:
+        assert clases['']['superclases'] == ['Cliente']
+
+
 def test_comparar_revisa_la_herencia(dominio, tmp_path):
     out = str(tmp_path / 'java')
     ok(tool('staruml_diagrama_a_codigo', archivo=dominio, diagrama='cu_1', lenguaje='java', carpeta_salida=out))

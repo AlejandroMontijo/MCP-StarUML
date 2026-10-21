@@ -241,6 +241,8 @@ herramienta, para que quien la use obtenga el diagrama correcto a la primera:
   no las traía (su destino no está en el diagrama) y la comparación las pedía, así que no llegaba al 100 %. Con el modelo
   real fallaba `test_java_de_cada_diagrama_de_clases_del_modelo_real_compila`. Ahora se buscan por id; lo cubre
   `test_clase_que_se_llama_igual_en_otro_paquete_no_toma_sus_relaciones`.
+- Cada id dibujado guarda su clave en `clases`: una clase sin `name` (un .mdj editado a mano) queda con la clave `''`
+  y sus relaciones van ahí, sin `KeyError`. Lo cubre `test_clase_dibujada_sin_nombre_no_rompe_la_extraccion`.
 
 ## 4. Convenciones y Reglas Inquebrantables
 
