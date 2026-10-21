@@ -230,6 +230,30 @@ def test_comparar_no_confunde_bc_cliente_con_cliente(dominio, tmp_path, lenguaje
     assert r['porcentaje_sincronizacion'] == 100.0, r['detalles_por_clase']
 
 
+def test_clase_que_se_llama_igual_en_otro_paquete_no_toma_sus_relaciones(dominio, tmp_path):
+    """Las asociaciones y la herencia de cada clase del diagrama se buscan por id: una clase de diseno que se llama
+    como una del dominio (en otro paquete) no se queda con las de esa. Antes el codigo generado no las traia (su
+    destino no esta en el diagrama) y la comparacion las pedia: menos de 100 %."""
+    ok(tool('mdj_paquete_crear', archivo=dominio, nombre='Diseno'))
+    ids = [ok(tool('mdj_clase_crear', archivo=dominio, paquete='Diseno', nombre=n))['clase'] for n in ('Cliente', 'ClienteVIP')]
+    dg = ok(tool('mdj_diagrama_crear', archivo=dominio, tipo='clases', nombre='Pantallas', dentro_de='Diseno'))['diagrama']
+    for x, cid in zip((40, 240), ids):
+        ok(tool('mdj_vista_agregar', archivo=dominio, diagrama=dg, elemento=cid, x=x, y=100))
+    doc = M.Doc(dominio)
+    clases = C.extraer_elementos_diagrama(doc, dg)['clases']
+    assert {n: (c['id'], c['asociaciones'], c['superclases']) for n, c in clases.items()} == {
+        'Cliente': (ids[0], [], []), 'ClienteVIP': (ids[1], [], [])}
+    del_dominio = C.extraer_elementos_diagrama(doc, 'cu_1')['clases']
+    assert [a['destino'] for a in del_dominio['Cliente']['asociaciones']] == ['Pedido']
+    assert del_dominio['ClienteVIP']['superclases'] == ['Cliente']
+    out = str(tmp_path / 'java')
+    ok(tool('staruml_diagrama_a_codigo', archivo=dominio, diagrama=dg, lenguaje='java', carpeta_salida=out))
+    compilado = compilar_java(out)
+    assert compilado is None or compilado[0], compilado
+    r = ok(tool('staruml_comparar_codigo', archivo=dominio, diagrama=dg, ruta_codigo=out, lenguaje='java'))
+    assert r['porcentaje_sincronizacion'] == 100.0, r['detalles_por_clase']
+
+
 def test_comparar_revisa_la_herencia(dominio, tmp_path):
     out = str(tmp_path / 'java')
     ok(tool('staruml_diagrama_a_codigo', archivo=dominio, diagrama='cu_1', lenguaje='java', carpeta_salida=out))

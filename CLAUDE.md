@@ -233,6 +233,15 @@ herramienta, para que quien la use obtenga el diagrama correcto a la primera:
   `test_pantallas_y_control_que_muestran_operaciones_se_miden_con_ellas` y, con StarUML,
   `test_staruml_dibuja_limpia_una_entidad_con_cinco_lineas_por_abajo_que_muestra_operaciones`.
 
+## 3h. Clases que se llaman igual en otro paquete (2026-10-20)
+
+- `extraer_elementos_diagrama` (lo usan `staruml_diagrama_a_codigo` y `staruml_comparar_codigo`) juntaba las
+  asociaciones y la herencia por nombre de clase. Una clase de diseño que se llama como una del dominio (p. ej. el
+  coordinador de pantallas y la entity del mismo nombre) se quedaba con las asociaciones de la otra: el código generado
+  no las traía (su destino no está en el diagrama) y la comparación las pedía, así que no llegaba al 100 %. Con el modelo
+  real fallaba `test_java_de_cada_diagrama_de_clases_del_modelo_real_compila`. Ahora se buscan por id; lo cubre
+  `test_clase_que_se_llama_igual_en_otro_paquete_no_toma_sus_relaciones`.
+
 ## 4. Convenciones y Reglas Inquebrantables
 
 1. **Reglas de Git:**
